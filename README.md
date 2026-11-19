@@ -63,4 +63,6 @@ To remove it:
   <img src="docs/settings-general.png" alt="General settings: tabs, suggested gh44 skills and theme" width="240">
   <img src="docs/settings-github.png" alt="GitHub settings: skills and the default for each row" width="240">
   <img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="240">
+  <img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="240">
+  <img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="240">
 </p>
