@@ -1,39 +1,9 @@
 // Starting a gh44 skill in a new Claude tab: here, in the background, or in the ticket's worktree.
-import { run, spaces, agents, appHome, notify, openOverlay, exec } from "herdr";
+import { run, spaces, agents, appHome, home, notify, openOverlay, exec } from "herdr";
 import { moveIssueToInProgress } from "./linear.js";
-
-const LINEAR_SKILLS = ["gh44-clarify", "gh44-plan", "gh44-implement", "gh44-address-review"];
-export const GITHUB_SKILLS = ["gh44-code-review", "gh44-address-review", "gh44-resolve-conflicts"];
-const PR_SKILLS = ["gh44-code-review", "gh44-address-review", "gh44-resolve-conflicts"];
-
-// Where a ticket is: backlog, todo, progress or review (a started state named like "In Review").
-export function getIssueStage(issue) {
-  if (issue.stateType === "started") return /review/i.test(issue.state) ? "review" : "progress";
-  if (issue.stateType === "backlog" || issue.stateType === "triage") return "backlog";
-  return "todo";
-}
-
-const STAGE_SKILL = { backlog: "gh44-plan", todo: "gh44-plan", progress: "gh44-implement", review: "gh44-address-review" };
-const ADDRESS_REVIEW = "gh44-address-review";
-const CODE_REVIEW = "gh44-code-review";
-
-// The next step for a ticket follows its status. Someone else's PR in review gets a review, not addressed.
-/** @param {{ stateType: string, state: string, isMyPullRequest: boolean }} issue */
-export function getDefaultLinearSkill(issue) {
-  const skill = STAGE_SKILL[getIssueStage(issue)];
-  return skill === ADDRESS_REVIEW && !issue.isMyPullRequest ? CODE_REVIEW : skill;
-}
-
-// A ticket's skill menu: address-review only on my own PR, code-review on someone else's.
-/** @param {{ isMyPullRequest: boolean, prUrl: string | null }} issue */
-export function getLinearSkills(issue) {
-  if (issue.isMyPullRequest) return LINEAR_SKILLS;
-  const skills = LINEAR_SKILLS.filter((s) => s !== ADDRESS_REVIEW);
-  return issue.prUrl ? [...skills, CODE_REVIEW] : skills;
-}
+import { getIssueStage, shortSkill } from "./settings.js";
 
 // Starting work on a ticket that is not started yet moves it to In Progress.
-const WORK_SKILLS = ["gh44-plan", "gh44-implement"];
 const NOT_STARTED_STAGES = ["backlog", "todo"];
 
 async function startIssue(issue) {
@@ -42,8 +12,23 @@ async function startIssue(issue) {
     notify({ title: `${issue.identifier} moved to ${r.state}`, level: "info" });
     return;
   }
-  const body = r.reason === "auth" ? "Run `linear auth login`." : r.message;
+  const body = r.reason === "auth" ? "Add your Linear API key in the Work panel's ⚙ settings." : r.message;
   notify({ title: `Could not move ${issue.identifier} to In Progress`, body, level: "warning" });
+}
+
+// The skills in ~/.claude/skills: its folders and symlinks, not plain files.
+// [] when the folder doesn't exist; null when it couldn't be listed (unknown, keep the defaults).
+/** @returns {Promise<string[] | null>} */
+export async function loadInstalledSkills() {
+  const folder = `${home()}/.claude/skills`;
+  try {
+    if ((await exec("test", ["-e", folder])).code !== 0) return [];
+    const r = await exec("find", [folder, "-mindepth", "1", "-maxdepth", "1", "(", "-type", "d", "-o", "-type", "l", ")"]);
+    if (r.code !== 0) return null;
+    return r.stdout.split("\n").map((path) => path.trim().split("/").pop()).filter((name) => name && !name.startsWith("."));
+  } catch {
+    return null;
+  }
 }
 
 // A space already working on this branch, other than the shown one.
@@ -65,25 +50,18 @@ export function focusAgent(agent) {
   run("tab.select", { id: agent.tab });
 }
 
-export const shortSkill = (skill) => skill.replace(/^gh44-/, "");
-
-// Another author's PR gets a review; mine gets its conflicts resolved, else its review addressed.
-export function getDefaultGithubSkill({ pr, login }) {
-  if (!login || pr.author !== login) return "gh44-code-review";
-  return pr.hasConflicts ? "gh44-resolve-conflicts" : "gh44-address-review";
-}
-
 // target: { ref (what the skill gets), prRef? (for PR skills), label (tab name prefix),
 //   branch?, folder?, main? (the repo's main checkout), worktree? (an existing checkout of the branch),
 //   space? (a space already open on the branch), issue? (the Linear issue, for its status) }
+// role (settings.js getSkillRole): a review skill gets prRef, a work skill moves a not started ticket.
 // isBackground: open the tab without switching to it (reviews). isWorktree: in the ticket's worktree.
 // Resolves once a new worktree's branch is ready and its dialog is open.
-export async function startSkill({ skill, target, isWorktree = false, isBackground = false }) {
-  const ref = PR_SKILLS.includes(skill) && target.prRef ? target.prRef : target.ref;
+export async function startSkill({ skill, target, role = "other", isWorktree = false, isBackground = false }) {
+  const ref = role === "review" && target.prRef ? target.prRef : target.ref;
   const prompt = `/${skill} ${ref}`;
   const name = `${target.label} ${shortSkill(skill)}`;
   const space = spaces().find((s) => s.active);
-  if (target.issue && WORK_SKILLS.includes(skill) && NOT_STARTED_STAGES.includes(getIssueStage(target.issue))) void startIssue(target.issue);
+  if (target.issue && role === "work" && NOT_STARTED_STAGES.includes(getIssueStage(target.issue))) void startIssue(target.issue);
   if (isWorktree && target.space) {
     run("tab.new", { name, space: target.space, folder: target.worktree, argv: ["claude", prompt], focus: !isBackground });
     return;
