@@ -1,10 +1,12 @@
 # gh44-herdr
 
-A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, gh44 mods and community mods.
+A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, gh44 mods.
 
 ## Work panel
 
-The layout's **Work panel** (the `hub` mod) lists your Linear tickets and GitHub PRs. Each row has a button that runs a skill on it in a new Claude tab, in the ticket's worktree.
+One window for the whole loop: the work to do (Linear tickets, GitHub PRs), the code (spaces and worktrees), and the agents that work on it. Each ticket or PR is linked to a skill, and the skill runs as an agent in the right place.
+
+The layout's **Work panel** (the `hub` mod) lists your tickets and PRs. Each row has a button that starts its skill in a new Claude tab, in the ticket's worktree. The agent shows up in the sidebar, and the row shows its status.
 
 Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
 
@@ -41,18 +43,18 @@ To remove it:
 
 ## What's here
 
-| Path                         | What                                                                                    |
-| ---------------------------- | --------------------------------------------------------------------------------------- |
-| `layouts/gh44-herdr.json`    | The layout                                                                              |
-| `keys.json`, `settings.json` | Keys and settings                                                                       |
+| Path                         | What                                                                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| `layouts/gh44-herdr.json`    | The layout                                                                            |
+| `keys.json`, `settings.json` | Keys and settings                                                                     |
 | `mods/`                      | gh44 mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
-| `mods.txt`                   | Mods without an installer, copied from GitHub                                           |
-| `plugins.txt`                | Mods with their own installer                                                           |
-| `install.sh`                 | Sets up this machine                                                                    |
-| `uninstall.sh`               | Removes it all and brings back your old keys and settings                               |
-| `sync.sh`                    | Copies the live layout, keys and settings back here                                     |
-| `reload.sh`                  | Reloads the linked mods                                                                 |
-| `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                                |
+| `mods.txt`                   | Mods without an installer, copied from GitHub                                         |
+| `plugins.txt`                | Mods with their own installer                                                         |
+| `install.sh`                 | Sets up this machine                                                                  |
+| `uninstall.sh`               | Removes it all and brings back your old keys and settings                             |
+| `sync.sh`                    | Copies the live layout, keys and settings back here                                   |
+| `reload.sh`                  | Reloads the linked mods                                                               |
+| `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                              |
 
 ## Screenshots
 
