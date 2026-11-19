@@ -15,18 +15,18 @@ By default the buttons run the gh44 skills from [gh44-brain](https://github.com/
 
 ## Community mods
 
-Thanks to the Herdr community for these:
-
-| Mod | What it does |
-|---|---|
+| Mod                                                                                  | What it does                                                                                                     |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
 | [herdr-code-review](https://github.com/sangit0/herdr-code-review) (`tabbed-changes`) | Source control panel in the Changes slot: changed files and diffs open in tabs, plus history and review comments |
-| [herdr-revive](https://github.com/dmazlum/herdr-revive) | Brings back the agent a terminal lost after a restart, and forks a live one |
-| [herdr-auto-title](https://github.com/kryptamine/herdr-auto-title) | Service behind `auto-title` that names tabs from what the agent is doing |
+| [herdr-revive](https://github.com/dmazlum/herdr-revive)                              | Brings back the agent a terminal lost after a restart, and forks a live one                                      |
+| [herdr-auto-title](https://github.com/kryptamine/herdr-auto-title)                   | Service behind `auto-title` that names tabs from what the agent is doing                                         |
 
 ## Install
 
 1. With the Herdr app open, run `./install.sh`. It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`.
 2. In the Work panel's ⚙ settings, pick the skills each row runs. Installed gh44 skills are picked for you.
+
+To remove it, run `./uninstall.sh` with the Herdr app open.
 
 ## Theme
 
@@ -34,14 +34,15 @@ Optional: clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next 
 
 ## What's here
 
-| Path | What |
-|---|---|
-| `layouts/gh44-herdr.json` | The layout |
-| `keys.json`, `settings.json` | Keys and settings |
-| `mods/` | My own mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
-| `mods.txt` | Mods without an installer, copied from GitHub |
-| `plugins.txt` | Mods with their own installer |
-| `install.sh` | Sets up this machine |
-| `sync.sh` | Copies the live layout, keys and settings back here |
-| `reload.sh` | Reloads the linked mods |
-| `tests/` | Work panel settings tests: `node --test tests/*.test.js` |
+| Path                         | What                                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `layouts/gh44-herdr.json`    | The layout                                                                              |
+| `keys.json`, `settings.json` | Keys and settings                                                                       |
+| `mods/`                      | My own mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods.txt`                   | Mods without an installer, copied from GitHub                                           |
+| `plugins.txt`                | Mods with their own installer                                                           |
+| `install.sh`                 | Sets up this machine                                                                    |
+| `uninstall.sh`               | Removes it all and brings back your old keys and settings                               |
+| `sync.sh`                    | Copies the live layout, keys and settings back here                                     |
+| `reload.sh`                  | Reloads the linked mods                                                                 |
+| `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                                |
