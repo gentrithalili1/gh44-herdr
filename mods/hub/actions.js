@@ -16,6 +16,16 @@ async function startIssue(issue) {
   notify({ title: `Could not move ${issue.identifier} to In Progress`, body, level: "warning" });
 }
 
+// Whether the gh44 Herdr themes are in Herdr's themes folder. null: couldn't check.
+/** @returns {Promise<boolean | null>} */
+export async function loadHasGh44Theme() {
+  try {
+    return (await exec("test", ["-f", `${appHome()}/themes/gh44-dark.json`])).code === 0;
+  } catch {
+    return null;
+  }
+}
+
 // The skills in ~/.claude/skills: its folders and symlinks, not plain files.
 // [] when the folder doesn't exist; null when it couldn't be listed (unknown, keep the defaults).
 /** @returns {Promise<string[] | null>} */

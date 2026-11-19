@@ -279,3 +279,20 @@ export function countInstalledSkills({ skills, installedSkills }) {
   const names = new Set([...skills.github.list, ...skills.linear.list].map((e) => e.name));
   return { installed: [...names].filter((name) => installedSkills.includes(name)).length, total: names.size };
 }
+
+// A skill can run when it is in ~/.claude/skills, or a plugin skill ("plugin:skill") that is not
+// listed there. null: not listed yet, all of them.
+/** @param {{ skill: string, installedSkills: string[] | null }} params */
+export const canRun = ({ skill, installedSkills }) => !installedSkills || skill.includes(":") || installedSkills.includes(skill);
+
+// The skills rows offer and run: the saved ones without the uninstalled. A row whose skill is
+// missing shows "open" instead of starting an unknown command.
+/** @param {{ skills: Skills, installedSkills: string[] | null }} params @returns {Skills} */
+export function getRunnableSkills({ skills, installedSkills }) {
+  /** @param {TabSkills} tabSkills @returns {TabSkills} */
+  const runnable = (tabSkills) => ({
+    list: tabSkills.list.filter((e) => canRun({ skill: e.name, installedSkills })),
+    defaults: Object.fromEntries(Object.entries(tabSkills.defaults).filter(([, name]) => name && canRun({ skill: name, installedSkills }))),
+  });
+  return { github: runnable(skills.github), linear: runnable(skills.linear) };
+}
