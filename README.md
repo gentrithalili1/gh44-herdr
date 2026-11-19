@@ -28,9 +28,10 @@ By default the buttons run the gh44 skills from [gh44-brain](https://github.com/
 
 To remove it, run `./uninstall.sh` with the Herdr app open.
 
-## Theme
+## Optional
 
-Optional: clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo before installing for the `gh44-dark` and `gh44-light` themes. Without it Herdr keeps its own colors.
+- **Theme:** clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo before installing, for the `gh44-dark` and `gh44-light` themes.
+- **Skills:** install [gh44-brain](https://github.com/gentrithalili1/gh44-brain) for the gh44 skills the Work panel runs. It also sets up its own `CLAUDE.md` and rules.
 
 ## What's here
 
