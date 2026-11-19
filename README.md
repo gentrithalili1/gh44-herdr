@@ -1,17 +1,12 @@
 # gh44-herdr
 
-My setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, my own mods and the third-party mods I use.
+A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, gh44 mods and community mods.
 
 ## Work panel
 
-The layout's **Work panel** (the `hub` mod) lists your Linear tickets and GitHub PRs. Each row has a button that runs the next skill in its own Claude tab, in the ticket's worktree.
+The layout's **Work panel** (the `hub` mod) lists your Linear tickets and GitHub PRs. Each row has a button that runs a skill on it in a new Claude tab, in the ticket's worktree.
 
-By default the buttons run the gh44 skills from [gh44-brain](https://github.com/gentrithalili1/gh44-brain): `plan`, `implement`, `address-review`, `code-review` and `resolve-conflicts`. To run your own skills on tickets and PRs instead, change the skill list, keys and per-row defaults in the panel's ⚙ settings. A row with no skill picked shows `open`, which opens the PR or ticket.
-
-- **Main button** picks the skill for the row: `plan` for a new ticket, `implement` for one in progress, `address-review` for your PR, `code-review` for someone else's.
-- **▾ on a row** lists every skill plus links to Linear or GitHub.
-- **PRs are grouped by whose move it is**, Linear tickets by status.
-- **Merged worktrees**: a note at the top offers to clean them up.
+Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
 
 ## Community mods
 
@@ -23,10 +18,21 @@ By default the buttons run the gh44 skills from [gh44-brain](https://github.com/
 
 ## Install
 
-1. With the Herdr app open, run `./install.sh`. It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`.
-2. In the Work panel's ⚙ settings, pick the skills each row runs. Installed gh44 skills are picked for you.
+With the Herdr app open:
 
-To remove it, run `./uninstall.sh` with the Herdr app open.
+```sh
+git clone https://github.com/gentrithalili1/gh44-herdr.git
+cd gh44-herdr
+./install.sh
+```
+
+It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`. Then pick the skills each row runs in the Work panel's ⚙ settings.
+
+To remove it:
+
+```sh
+./uninstall.sh
+```
 
 ## Optional
 
@@ -39,7 +45,7 @@ To remove it, run `./uninstall.sh` with the Herdr app open.
 | ---------------------------- | --------------------------------------------------------------------------------------- |
 | `layouts/gh44-herdr.json`    | The layout                                                                              |
 | `keys.json`, `settings.json` | Keys and settings                                                                       |
-| `mods/`                      | My own mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods/`                      | gh44 mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
 | `mods.txt`                   | Mods without an installer, copied from GitHub                                           |
 | `plugins.txt`                | Mods with their own installer                                                           |
 | `install.sh`                 | Sets up this machine                                                                    |
@@ -47,3 +53,12 @@ To remove it, run `./uninstall.sh` with the Herdr app open.
 | `sync.sh`                    | Copies the live layout, keys and settings back here                                     |
 | `reload.sh`                  | Reloads the linked mods                                                                 |
 | `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                                |
+
+## Screenshots
+
+<p>
+  <img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="240">
+  <img src="docs/settings-general.png" alt="General settings: tabs, suggested gh44 skills and theme" width="240">
+  <img src="docs/settings-github.png" alt="GitHub settings: skills and the default for each row" width="240">
+  <img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="240">
+</p>
