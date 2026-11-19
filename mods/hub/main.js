@@ -15,13 +15,15 @@ import {
   loadWorktrees, loadMergedWorktrees, removeWorktree,
 } from "./github.js";
 import { loadIssues, loadLinearMeta } from "./linear.js";
+import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
+import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill } from "./actions.js";
+import { SettingsView } from "./settings-view.js";
 import {
-  GITHUB_SKILLS, shortSkill, getDefaultGithubSkill, getDefaultLinearSkill, getLinearSkills, getIssueStage,
-  findSpaceOnBranch, findAgentFor, focusAgent, startSkill,
-} from "./actions.js";
+  getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTabSkills, getTicketSkills,
+  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab,
+} from "./settings.js";
 
 const NO_MENU_ROW = -1;
-const icon = (name) => `mods/hub/icons/${name}.svg`;
 
 const STORE = {
   tab: "hub.tab",
@@ -30,6 +32,7 @@ const STORE = {
   collapsed: "hub.collapsed",
   // Merged worktree paths whose notice was closed with ✕.
   dismissedMerged: "hub.dismissedMerged",
+  settings: "hub.settings",
 };
 // GitHub filters are kept per repo ("hub.github.filters|<repo id>"); Linear's are shared.
 const isGithubStore = (store) => store.startsWith(STORE.github);
@@ -66,19 +69,6 @@ const SKELETON_ROWS = 4;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
-// Keys on a selected row that start a skill directly.
-const KEY_SKILLS = {
-  github: { r: "gh44-code-review", a: "gh44-address-review", c: "gh44-resolve-conflicts" },
-  linear: { c: "gh44-clarify", p: "gh44-plan", i: "gh44-implement", a: "gh44-address-review", r: "gh44-code-review" },
-};
-const KEY_HINTS = {
-  github: "j/k move · ↵ run · r review · a address · c conflicts · o open · / search",
-  linear: "j/k move · ↵ run · c clarify · p plan · i implement · o open · / search",
-};
-
-// One meaning per color, everywhere in the panel. Accent is for buttons only.
-const palette = (t) => ({ success: t.ansi2, danger: t.ansi1, warning: t.ansi3, neutral: t.dim, quiet: t.muted });
-
 const CI_STATUS = {
   passing: { tone: "success", tip: "Checks passing" },
   failing: { tone: "danger", tip: "Checks failing" },
@@ -102,12 +92,8 @@ const DECISION_CHIP = {
 };
 const NEEDS_REVIEW_CHIP = { label: "needs review", tone: "warning" };
 const CI_CHIP_LABEL = { passing: "checks passing", failing: "checks failing", pending: "checks running" };
-// PR numbers in the terminal's font.
-const MONO_FONT = "Lilex";
 // A row's rail in its group's tone marks which group it belongs to.
 const RAIL_OPACITY = 0.7;
-// Side space of the panel's header, search and list.
-const GUTTER = 14;
 // A row's status icon and the gap after it; the chips line starts where the title does.
 const STATUS_ICON_SIZE = 14;
 const TITLE_GAP = 7;
@@ -152,7 +138,22 @@ const removing = new Set();
 let pendingStart = null;
 // Labels of items whose new worktree is being prepared (fetch, branch): their button shows a spinner.
 const preparing = new Set();
-const session = { login: null, meta: { status: "idle", teams: [], projects: [] } };
+// linearAccount: who the saved Linear key belongs to, checked when the settings open.
+const session = {
+  login: null,
+  meta: { status: "idle", teams: [], projects: [] },
+  /** @type {{ status: "idle" | "checking" | "connected" | "missing" | "failed", name?: string, message?: string }} */
+  linearAccount: { status: "idle" },
+  // Folder names in ~/.claude/skills; null until listed.
+  /** @type {string[] | null} */
+  installedSkills: null,
+};
+/** @type {Record<string, "general" | "github" | "linear">} */
+const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear" };
+/** @param {string} url */
+const toGithubLink = (url) => ({ id: "github", label: "Open in GitHub", icon: "github", url });
+/** @param {string} url */
+const toLinearLink = (url) => ({ id: "linear", label: "Open in Linear", icon: "linear", url });
 
 const getFilters = (store) => {
   // A repo without its own filters starts from the ones saved before filters were per repo.
@@ -176,7 +177,29 @@ const toggleCollapsed = (id) => {
   const ids = shared(STORE.collapsed) ?? [];
   setShared(STORE.collapsed, ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
 };
-const currentTab = () => (shared(STORE.tab) === "linear" ? "linear" : "github");
+// Only what the user changed is saved; getSettings fills in the rest.
+const getSavedSettings = () => {
+  const saved = shared(STORE.settings);
+  return saved && typeof saved === "object" ? saved : {};
+};
+/** @param {Record<string, unknown>} patch */
+const patchSettings = (patch) => setShared(STORE.settings, { ...getSavedSettings(), ...patch });
+// Only the tab that changed is saved; the other keeps following the defaults until edited.
+/** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills }} params */
+const saveSkills = ({ tab, skills }) => {
+  const saved = getSavedSettings();
+  const savedSkills = "skills" in saved && saved.skills && typeof saved.skills === "object" ? saved.skills : {};
+  patchSettings({ skills: { ...savedSkills, [tab]: skills[tab] } });
+};
+// One render reads settings and the shown tab for every row; build them once per render.
+// Outside a render (handlers, ticks) they are read fresh.
+/** @type {{ settings: import("./settings.js").Settings, tab: "github" | "linear" } | null} */
+let frame = null;
+const readPanelSettings = () => getSettings({ saved: shared(STORE.settings), installedSkills: session.installedSkills });
+const getPanelSettings = () => frame?.settings ?? readPanelSettings();
+/** @param {string} skill */
+const getRole = (skill) => getSkillRole({ skills: getPanelSettings().skills, skill });
+const currentTab = () => frame?.tab ?? getShownTab({ saved: shared(STORE.tab), settings: getPanelSettings() });
 
 // The shown space's repo folder: its focused terminal, else any terminal in the shown tab,
 // else any terminal in the space, else where the space was made.
@@ -195,7 +218,6 @@ function currentFolder() {
     ?? null;
 }
 const activeMachine = () => spaces().find((s) => s.active)?.machine ?? undefined;
-const stop = (_e, cx) => cx.stop_propagation();
 
 function findNode(node, id) {
   if (node?.id === id) return node;
@@ -244,17 +266,24 @@ function openMenu(menu) {
   openOverlay({ mod: "hub", kind: "popup", width: MENU_WIDTH, height, props: { menu: { ...menu, height } } });
 }
 
-// A ticket without a worktree asks where its run goes: a new worktree or this space.
-// Address-review works on an existing PR or local branch, so it never asks.
-const NEVER_ASK_SKILLS = ["gh44-address-review", "gh44-code-review"];
-const shouldAskWhere = ({ skill, target }) => !NEVER_ASK_SKILLS.includes(skill) && Boolean(target.main && target.branch && !target.worktree);
+// Where a ticket's run goes: its worktree when it has one, else what "Where runs go" says
+// (ask, a new worktree, this space). A review skill works on an existing PR or branch: here.
+/**
+ * @param {{ skill: string, target: { main?: string | null, branch?: string | null, worktree?: string } }} params
+ * @returns {"ask" | "worktree" | "here"}
+ */
+const getRunPlace = ({ skill, target }) => {
+  if (target.worktree) return "worktree";
+  return getWhereToRun({ where: getPanelSettings().whereToRun, role: getRole(skill), hasWorktreeTarget: Boolean(target.main && target.branch) });
+};
 
 function startTicketSkill({ skill, menu }) {
-  if (shouldAskWhere({ skill, target: menu.target })) {
+  const place = getRunPlace({ skill, target: menu.target });
+  if (place === "ask") {
     openMenu({ ...menu, askSkill: skill });
     return;
   }
-  void startSkill({ skill, target: menu.target, isWorktree: Boolean(menu.target.worktree) });
+  void startSkill({ skill, target: menu.target, role: getRole(skill), isWorktree: place === "worktree" });
 }
 
 export default class Hub extends View {
@@ -306,9 +335,15 @@ export default class Hub extends View {
     });
     this.lastGithub = null;
     this.linearSearch = this.createSearch({ placeholder: "Search ID or title" });
+    this.settingsView = new SettingsView({
+      session, getSettings: getPanelSettings, patchSettings, saveSkills,
+      onLinearKeyChange: (cx) => this.reloadLinear(cx),
+      focusPanel: () => this.handle.focus(),
+    });
     if (checking()) return;
+    this.settingsView.loadSkillList(cx);
     if (!session.login) cx.spawn(async (cx) => { session.login = await loadGithubLogin(); cx.notify(); });
-    if (session.meta.status !== "success") this.loadMeta(cx);
+    if (session.meta.status !== "success" && getPanelSettings().shouldShowLinear) this.loadMeta(cx);
     // pane.go and Herdr hand the panel the keyboard with "focus".
     cx.spawn(async (cx) => {
       for (;;) {
@@ -316,6 +351,11 @@ export default class Hub extends View {
         if (command === "focus") this.handle.focus();
         // `herdr-app do hub.github` / `hub.linear`: show that tab (bindable in keys.json).
         if (command === "github" || command === "linear") setShared(STORE.tab, command);
+        // `herdr-app do hub.settings` opens the ⚙ settings on their last section;
+        // hub.settings-general / -github / -linear on that one.
+        if (command === "settings") this.settingsView.open({ cx });
+        const section = SETTINGS_COMMANDS[command];
+        if (section) this.settingsView.open({ cx, section });
         if (command === "cleanup") await this.runCleanup(cx);
         if (command === "start" && pendingStart) {
           const start = pendingStart;
@@ -378,7 +418,12 @@ export default class Hub extends View {
     if (this.shouldRevalidate || linearKey !== this.linearKey) this.revalidate(linearKey);
     this.linearKey = linearKey;
     // Nothing is fetched while the panel is closed; opening it refreshes both tabs.
-    if (isShown) this.ensure({ cx, key: this.linearKey, load: () => loadIssues(ln) });
+    if (isShown && getPanelSettings().shouldShowLinear) this.ensure({ cx, key: this.linearKey, load: () => loadIssues(ln) });
+    // A hidden GitHub tab loads nothing of its own: no repo details, PRs, worktrees or prefetch.
+    if (!getPanelSettings().shouldShowGithub) {
+      this.shouldRevalidate = false;
+      return;
+    }
 
     // The repo's name (for the search query) and labels (for the Label filter), once per repo.
     // A failed name lookup is retried after ERROR_RETRY_MS instead of blocking the repo for good.
@@ -538,11 +583,16 @@ export default class Hub extends View {
       const entry = cache.get(key);
       if (entry) cacheSet(key, { ...entry, at: 0 });
     }
-    this.loadMeta(cx);
+    if (getPanelSettings().shouldShowLinear) this.loadMeta(cx);
     this.tick(cx);
   }
 
   handleKey(e, cx) {
+    if (this.settingsView.isTyping()) return;
+    if (this.settingsView.isOpen) {
+      if (e.key === "escape") { this.settingsView.close(); cx.stop_propagation(); cx.notify(); }
+      return;
+    }
     if (this.isSearchFocused) {
       if (e.key === "escape" || e.key === "enter") { this.handle.focus(); cx.stop_propagation(); cx.notify(); }
       return;
@@ -565,10 +615,10 @@ export default class Hub extends View {
       case "enter": row?.primary(cx); break;
       case "o": if (row) cx.open_url(row.url); break;
       case "/": (tab === "github" ? this.githubSearch : this.linearSearch).focus(); break;
-      case "1": setShared(STORE.tab, "github"); break;
-      case "2": setShared(STORE.tab, "linear"); break;
+      case "1": if (getPanelSettings().shouldShowGithub) setShared(STORE.tab, "github"); break;
+      case "2": if (getPanelSettings().shouldShowLinear) setShared(STORE.tab, "linear"); break;
       default: {
-        const skill = KEY_SKILLS[tab][e.key];
+        const skill = getKeySkills({ skills: getPanelSettings().skills, tab })[e.key];
         if (!skill || !row) return;
         row.start(skill);
       }
@@ -800,8 +850,9 @@ export default class Hub extends View {
   listState({ source, label, shownCount, hasFilters, onClear }) {
     if (!source) return this.skeleton();
     if (source.status === "error") {
+      if (source.reason === "auth" && label === "Linear") return this.settingsView.linearConnect(source.message);
       if (source.reason === "auth") {
-        const argv = label === "GitHub" ? ["gh", "auth", "login"] : ["linear", "auth", "login"];
+        const argv = ["gh", "auth", "login"];
         return this.message({ title: `${label} CLI is not logged in`, body: `Runs \`${argv.join(" ")}\` in a new tab.`, action: { label: "Log in", onClick: () => run("tab.new", { name: `${label} login`, argv }) } });
       }
       if (source.reason === "notRepo") return this.message({ title: "Not a GitHub repo", body: `${this.folder ?? "No folder"} is not inside a repo. Focus a terminal in one.` });
@@ -847,18 +898,26 @@ export default class Hub extends View {
   }
 
   // An agent already on it: open it. Else resume a space on its branch, else start the next skill.
-  primaryFor({ agent, branch, skill, target, isWorktree, isBackground = false, start = null, canAsk = false }) {
+  // Without a skill for this kind of row, the button opens the PR or ticket (link).
+  /**
+   * @param {{
+   *   agent: ReturnType<typeof findAgentFor>, branch: string | null, skill: string | null, target: { label: string, worktree?: string },
+   *   link: { icon: string, label: string, url: string }, isWorktree: boolean, isBackground?: boolean, start?: (() => void) | null, canAsk?: boolean,
+   * }} params
+   */
+  primaryFor({ agent, branch, skill, target, link, isWorktree, isBackground = false, start = null, canAsk = false }) {
     if (preparing.has(target.label)) return { label: "preparing", icon: "branch", isLoading: true, tip: `Preparing the ${target.label} worktree`, run: () => {} };
     if (agent) return { label: "open", icon: "resume", agentStatus: agent.status, tip: `Go to ${agent.tab_name} (${AGENT_STATUS[agent.status]?.label ?? agent.status})`, run: () => focusAgent(agent) };
     const space = findSpaceOnBranch(branch);
     if (space) return { label: "resume", icon: "resume", tip: `Go to ${space.name}`, run: () => run("space.select", { id: space.id }) };
-    const worktreeTip = `/${skill} in this ticket's worktree (${target.worktree?.split("/").pop()})`;
+    if (!skill) return { label: "open", icon: link.icon, tip: `${link.label} (no skill picked for this row in ⚙ settings)`, run: (/** @type {import("gpui-kit").Context} */ cx) => cx.open_url(link.url) };
+    const worktreeTip = target.worktree ? `/${skill} in this ticket's worktree (${target.worktree.split("/").pop()})` : `/${skill} in a new worktree`;
     return {
       label: shortSkill(skill), icon: isWorktree ? "branch" : "play",
       // Shown on the button, so it is clear before clicking that a worktree is involved.
       worktreeBadge: isWorktree ? "worktree" : null,
       tip: isWorktree ? worktreeTip : canAsk ? `/${skill}: asks first, new worktree or this space` : isBackground ? `/${skill} in a background tab` : `/${skill} in a new tab here`,
-      run: start ?? (() => void startSkill({ skill, target, isWorktree, isBackground })),
+      run: start ?? (() => void startSkill({ skill, target, role: getRole(skill), isWorktree, isBackground })),
     };
   }
 
@@ -933,6 +992,17 @@ export default class Hub extends View {
       .bg(done + "1f").border(1).border_color(done + "59")
       .child(head)
       .when(Boolean(this.isMergedOpen), (el) => el.children(merged.map(row)))];
+  }
+
+  // A tab where no kind of row runs a skill (a fresh install): a line pointing to the settings.
+  /** @param {"github" | "linear"} tab */
+  skillsBanner(tab) {
+    if (session.installedSkills === null || !hasNoDefaults({ skills: getPanelSettings().skills, tab })) return [];
+    return [this.note({
+      id: `${tab}-skills-banner`,
+      text: "Choose which skills your rows run.",
+      action: { label: "Open settings", onClick: (/** @type {import("gpui-kit").Context} */ cx) => { this.settingsView.open({ cx, section: tab }); cx.notify(); } },
+    })];
   }
 
   // The confirm dialog for removing some merged worktrees; its confirm runs `hub.cleanup`.
@@ -1018,21 +1088,22 @@ export default class Hub extends View {
 
   pullRequestEntry({ pr, group }) {
     const colors = palette(theme());
-    const skill = getDefaultGithubSkill({ pr, login: session.login });
+    const skills = getPanelSettings().skills;
+    const skill = getDefaultSkill({ skills, tab: "github", situation: getGithubSituation({ pr, login: session.login }) });
     const target = { ref: pr.url, label: `#${pr.number}`, folder: this.folder };
     const ci = CI_STATUS[pr.ci];
     const agent = findAgentFor({ label: target.label, branch: pr.branch });
     // Ready to merge: merging happens on GitHub. Else reviews run in a background tab, so several can start in a row.
     const primary = group.id === "merge" && !agent
       ? { label: "merge", icon: "github", tip: "Open on GitHub to merge", run: (cx) => cx.open_url(pr.url) }
-      : this.primaryFor({ agent, branch: pr.branch, skill, target, isWorktree: false, isBackground: true });
+      : this.primaryFor({ agent, branch: pr.branch, skill, target, link: toGithubLink(pr.url), isWorktree: false, isBackground: true });
     const element = this.row({
       id: pr.id, title: pr.title, isTitleDim: pr.isDraft, primary, rail: group.tone,
       status: { icon: `ci-${pr.ci}`, color: colors[ci.tone], tip: ci.tip },
       chips: this.pullRequestChips({ pr, group }),
-      menu: { skills: GITHUB_SKILLS, target, isBackground: true, links: [{ id: "github", label: "Open in GitHub", icon: "github", url: pr.url }] },
+      menu: { skills: getTabSkills({ skills, tab: "github" }), target, isBackground: true, links: [toGithubLink(pr.url)] },
     });
-    return { id: pr.id, url: pr.url, element, primary: primary.run, start: (s) => void startSkill({ skill: s, target, isBackground: true }) };
+    return { id: pr.id, url: pr.url, element, primary: primary.run, start: (s) => void startSkill({ skill: s, target, role: getRole(s), isBackground: true }) };
   }
 
   // PR · author and age · review status · conflicts · checks · size · labels
@@ -1106,6 +1177,7 @@ export default class Hub extends View {
     });
     // Notes, headers and rows side by side, so a row's child index is known for scrolling.
     const elements = [
+      ...this.skillsBanner("github"),
       ...this.cleanupNote(),
       ...(isPasted ? [this.note({ id: "gh-pasted", text: "Running your GitHub query as is. Show and Filters are off until you clear it." })] : []),
     ];
@@ -1143,7 +1215,8 @@ export default class Hub extends View {
 
   issueEntry({ issue, showAssignee }) {
     const colors = palette(theme());
-    const skill = getDefaultLinearSkill(issue);
+    const settings = getPanelSettings();
+    const skill = getDefaultSkill({ skills: settings.skills, tab: "linear", situation: getLinearSituation(issue) });
     const stage = getIssueStage(issue);
     // A space already on the ticket's branch (it may be in another repo), else the focused repo's worktrees.
     const space = issue.branch ? spaces().find((sp) => sp.branch === issue.branch) : undefined;
@@ -1153,9 +1226,14 @@ export default class Hub extends View {
       ...(worktree ? { worktree } : {}), ...(space ? { space: space.id } : {}),
     };
     const agent = findAgentFor({ label: issue.identifier, branch: issue.branch });
-    const skills = getLinearSkills(issue);
-    const menu = { skills, target, isTicket: true, links: [{ id: "linear", label: "Open in Linear", icon: "linear", url: issue.url }] };
-    const primary = this.primaryFor({ agent, branch: issue.branch, skill, target, isWorktree: Boolean(worktree), canAsk: shouldAskWhere({ skill, target }), start: () => startTicketSkill({ skill, menu }) });
+    const skills = getTicketSkills({ skills: settings.skills, issue });
+    const link = toLinearLink(issue.url);
+    const menu = { skills, target, isTicket: true, links: [link] };
+    const place = skill ? getRunPlace({ skill, target }) : "here";
+    const primary = this.primaryFor({
+      agent, branch: issue.branch, skill, target, link, isWorktree: place === "worktree",
+      canAsk: place === "ask", start: () => startTicketSkill({ skill, menu }),
+    });
     const priority = PRIORITY_OPTIONS.find((p) => p.value === issue.priority);
     const id = issue.identifier;
     const element = this.row({
@@ -1198,7 +1276,7 @@ export default class Hub extends View {
       hasFilters: defs.some((def) => countPicked({ store, def }) > 0) || search.trim() !== "",
     });
     // Notes, headers and rows side by side, so a row's child index is known for scrolling.
-    const elements = [...this.cleanupNote()];
+    const elements = [...this.skillsBanner("linear"), ...this.cleanupNote()];
     const selectable = [];
     this.followShownTab({ tab: "linear", items: shown, label: (issue) => issue.identifier });
     for (const group of groupIssuesByState(shown, f.sort)) {
@@ -1219,6 +1297,23 @@ export default class Hub extends View {
       .child(v_flex().px(GUTTER).pt(12).pb(12).gap(6).border_b(1).border_color(t.border)
         .child(this.searchRow({ store, scopeDef: { title: "Show", field: "mine", isMulti: false, options: LINEAR_SCOPES }, state: this.linearSearch, defs })))
       .child(this.list({ id: "ln-list", state, entries: elements }));
+  }
+
+  // ---------- settings ----------
+
+  // The Linear lists and filters load again with the new key, or show the key field without one.
+  /** @param {import("gpui-kit").Context} cx */
+  reloadLinear(cx) {
+    for (const key of [...cache.keys()]) if (key.startsWith("ln|")) cache.delete(key);
+    session.meta = { status: "idle", teams: [], projects: [] };
+    if (getPanelSettings().shouldShowLinear) this.loadMeta(cx);
+    this.tick(cx);
+  }
+
+  // The Linear tab is showing its key field: ⚙ then opens on the Linear section.
+  isLinearKeyMissing() {
+    const result = cache.get(this.linearKey)?.result;
+    return currentTab() === "linear" && result?.status === "error" && result.reason === "auth";
   }
 
   // ---------- menu popup ----------
@@ -1285,19 +1380,21 @@ export default class Hub extends View {
 
   skillRows(menu) {
     const t = theme();
-    const isWorktree = Boolean(menu.target.worktree);
-    const rows = menu.skills.map((skill) => this.menuRow({
-      id: `skill-${skill}`, label: skill, actionIcon: isWorktree ? "branch" : "play",
-      onClick: (cx) => {
-        if (menu.isTicket && shouldAskWhere({ skill, target: menu.target })) {
-          this.askSkill = skill;
-          this.menuIndex = 0;
-          cx.notify();
-          return;
-        }
-        this.queueStart({ skill, target: menu.target, isWorktree: isWorktree && Boolean(menu.isTicket), isBackground: Boolean(menu.isBackground) });
-      },
-    }));
+    const rows = menu.skills.map((skill) => {
+      const place = menu.isTicket ? getRunPlace({ skill, target: menu.target }) : "here";
+      return this.menuRow({
+        id: `skill-${skill}`, label: skill, actionIcon: place === "worktree" ? "branch" : "play",
+        onClick: (cx) => {
+          if (place === "ask") {
+            this.askSkill = skill;
+            this.menuIndex = 0;
+            cx.notify();
+            return;
+          }
+          this.queueStart({ skill, target: menu.target, role: getRole(skill), isWorktree: place === "worktree", isBackground: Boolean(menu.isBackground) });
+        },
+      });
+    });
     const links = menu.links ?? [];
     const linkRows = links.length > 0
       ? [this.menuSeparator("links"), ...links.map((link) => this.menuRow({
@@ -1319,7 +1416,7 @@ export default class Hub extends View {
     });
     return [title, ...WHERE_OPTIONS.map((o) => this.menuRow({
       id: `where-${o.id}`, label: o.label, actionIcon: o.icon,
-      onClick: () => this.queueStart({ skill, target, isWorktree: o.isWorktree }),
+      onClick: () => this.queueStart({ skill, target, role: getRole(skill), isWorktree: o.isWorktree }),
     })), this.menuSeparator("back"), back];
   }
 
@@ -1430,7 +1527,7 @@ export default class Hub extends View {
   // A main tab: icon, name and count pill, with an accent underline when shown.
   tabButton({ id, label, iconName, count, isOn }) {
     const t = theme();
-    return v_flex().id(`tab-${id}`).h_full().px(4).cursor_pointer().on_click(() => setShared(STORE.tab, id))
+    return v_flex().id(`tab-${id}`).h_full().px(4).cursor_pointer().on_click((_e, cx) => { this.settingsView.close(); setShared(STORE.tab, id); cx.notify(); })
       .child(h_flex().flex_1().px(8).gap(7).items_center().text_size(13.5).font_medium()
         .text_color(isOn ? t.foreground : t.muted).hover((s) => s.text_color(t.foreground))
         .child(svg(icon(iconName)).size(15))
@@ -1440,8 +1537,25 @@ export default class Hub extends View {
       .child(div().h(2).w_full().rounded(1).bg(isOn ? t.accent : t.surface));
   }
 
+  /** @param {"github" | "linear"} tab */
+  mainView(tab) {
+    if (this.settingsView.isOpen) return this.settingsView.render();
+    return tab === "github" ? this.githubView() : this.linearView();
+  }
+
   render(cx) {
     if (this.isMenu) return this.menuView();
+    const settings = readPanelSettings();
+    frame = { settings, tab: getShownTab({ saved: shared(STORE.tab), settings }) };
+    try {
+      return this.renderPanel(cx);
+    } finally {
+      frame = null;
+    }
+  }
+
+  /** @param {import("gpui-kit").Context} cx */
+  renderPanel(cx) {
     // Herdr re-renders on every space, tab or focus change: switch repos now instead of on the
     // next tick. render may not notify, and spawn runs its body at once, so the task sleeps
     // past this render before the tick (a notify inside render throws and strands the load).
@@ -1452,6 +1566,7 @@ export default class Hub extends View {
     }
     const t = theme();
     const tab = currentTab();
+    const settings = getPanelSettings();
     const isLoading = inflight.has(this.githubKey) || inflight.has(this.linearKey);
     const countOf = (key) => {
       const result = cache.get(key)?.result;
@@ -1461,14 +1576,25 @@ export default class Hub extends View {
       .text_color(t.foreground).text_size(13)
       .track_focus(this.handle).on_key_down((e, cx) => this.handleKey(e, cx))
       .child(h_flex().flex_none().h(TAB_BAR_HEIGHT).px(GUTTER - 4).gap(2).items_end().bg(t.surface).border_b(1).border_color(t.border)
-        .child(this.tabButton({ id: "github", label: "GitHub", iconName: "github", count: countOf(this.githubKey), isOn: tab === "github" }))
-        .child(this.tabButton({ id: "linear", label: "Linear", iconName: "linear", count: countOf(this.linearKey), isOn: tab === "linear" }))
+        .when(settings.shouldShowGithub, (el) => el.child(this.tabButton({ id: "github", label: "GitHub", iconName: "github", count: countOf(this.githubKey), isOn: tab === "github" })))
+        .when(settings.shouldShowLinear, (el) => el.child(this.tabButton({ id: "linear", label: "Linear", iconName: "linear", count: countOf(this.linearKey), isOn: tab === "linear" })))
         .child(div().flex_1())
         .child(div().id("hub-refresh").self_center().size(26).flex().items_center().justify_center().rounded(6).cursor_pointer()
           .text_color(t.muted).hover((s) => s.bg(t.hover)).tooltip("Refresh")
           .on_click((_e, cx) => this.handleRefresh(cx))
-          .child(isLoading ? svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(900) : svg(icon("refresh")).size(14))))
-      .child(tab === "github" ? this.githubView() : this.linearView())
-      .child(div().flex_none().px(GUTTER).py(6).border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim).truncate().child(KEY_HINTS[tab]));
+          .child(isLoading ? svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(900) : svg(icon("refresh")).size(14)))
+        .child(div().id("hub-settings").self_center().size(26).flex().items_center().justify_center().rounded(6).cursor_pointer()
+          .text_color(this.settingsView.isOpen ? t.foreground : t.muted).when(this.settingsView.isOpen, (el) => el.bg(t.hover)).hover((s) => s.bg(t.hover))
+          .tooltip(this.settingsView.isOpen ? "Close settings" : "Settings")
+          .on_click((_e, cx) => {
+            if (this.settingsView.isOpen) this.settingsView.close();
+            // On a Linear tab asking for its key, land on the key.
+            else this.settingsView.open({ cx, section: this.isLinearKeyMissing() ? "linear" : undefined });
+            cx.notify();
+          })
+          .child(svg(icon("settings")).size(14))))
+      .child(this.mainView(tab))
+      .when(settings.shouldShowKeyHints && !this.settingsView.isOpen, (el) => el.child(div().flex_none().px(GUTTER).py(6).border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim).truncate()
+        .child(getKeyHints({ skills: settings.skills, tab }))));
   }
 }

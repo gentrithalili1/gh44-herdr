@@ -4,80 +4,44 @@ My setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, 
 
 ## Work panel
 
-The layout's **Work panel** (the `hub` mod) shows your Linear tickets and GitHub PRs, each with a button that starts the next skill in its own Claude tab. The skills are the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain).
+The layout's **Work panel** (the `hub` mod) lists your Linear tickets and GitHub PRs. Each row has a button that runs the next skill in its own Claude tab, in the ticket's worktree.
 
-```text
-┌───────────────┬──────────────────────────────────┬──────────────────────────────┐
-│ Spaces        │ THU-123 plan │ #456 review │ +   │ GitHub 5 │ Linear 4          │
-│  frontend     ├──────────────────────────────────┤ Show ▾ │ Search…  │ Filters │
-│   thu-123-…   │                                  │ ● In Progress                │
-│  e2e          │  Claude Code                     │   THU-123 Add export         │
-│               │  /gh44-implement THU-123         │   high · Jobs   [implement ▾]│
-│ Agents        │                                  │ ● Todo                       │
-│  ◌ THU-123 …  │  (the skill runs here, in the    │   THU-130 Fix filter         │
-│  ○ #456 rev…  │   ticket's worktree)             │   medium        [plan ▾]     │
-│               │                                  │                              │
-└───────────────┴──────────────────────────────────┴──────────────────────────────┘
-```
+![Work panel](docs/work-panel.png)
 
-| Row | Main button | What happens |
-| --- | --- | --- |
-| Linear ticket in Backlog / Todo | `plan` | Asks: new worktree or this space, then runs `/gh44-plan <ticket>` in a new tab and moves the ticket to In Progress |
-| Linear ticket in progress | `implement` | `/gh44-implement <ticket>` in the ticket's worktree (asks where when it has none), and moves the ticket to In Progress |
-| Linear ticket in review, or my PR | `address-review` | `/gh44-address-review <pr>` |
-| My PR with conflicts | `resolve-conflicts` | `/gh44-resolve-conflicts <pr>` |
-| Someone else's PR | `code-review` | `/gh44-code-review <pr>` in a background tab |
-| A row with an agent on it | `open` | Jumps to that agent's tab; the button shows its status |
+By default the buttons run the gh44 skills from [gh44-brain](https://github.com/gentrithalili1/gh44-brain): `plan`, `implement`, `address-review`, `code-review` and `resolve-conflicts`. To run your own skills on tickets and PRs instead, change the skill list, keys and per-row defaults in the panel's ⚙ settings. A row with no skill picked shows `open`, which opens the PR or ticket.
 
-- **▾ on a row** lists every skill (`clarify`, `plan`, `implement`, `address-review`, …) and links to Linear or GitHub. Keys on a selected row: Linear `c` clarify, `p` plan, `i` implement; GitHub `r` review, `a` address, `c` conflicts; both `o` open.
-- **PRs are grouped by whose move it is**: Needs fixing, Ready to merge, To review, Waiting on others, Drafts. Linear tickets are grouped by status, with a sort inside each group.
-- **The shown tab selects its row**, so you always see which ticket or PR the agent in front of you is on.
-- **Switching repos is instant**: the PR lists of every repo with an open space load in the background.
-- **Merged worktrees**: a note at the top offers to clean them up, spaces and branches included.
+- **Main button** picks the skill for the row: `plan` for a new ticket, `implement` for one in progress, `address-review` for your PR, `code-review` for someone else's.
+- **▾ on a row** lists every skill plus links to Linear or GitHub.
+- **PRs are grouped by whose move it is**, Linear tickets by status.
+- **Merged worktrees**: a note at the top offers to clean them up.
+
+## Community mods
+
+Thanks to the Herdr community for these:
+
+| Mod | What it does |
+|---|---|
+| [herdr-code-review](https://github.com/sangit0/herdr-code-review) (`tabbed-changes`) | Source control panel in the Changes slot: changed files and diffs open in tabs, plus history and review comments |
+| [herdr-revive](https://github.com/dmazlum/herdr-revive) | Brings back the agent a terminal lost after a restart, and forks a live one |
+| [herdr-auto-title](https://github.com/kryptamine/herdr-auto-title) | Service behind `auto-title` that names tabs from what the agent is doing |
 
 ## Install
 
-With the Herdr app open:
-
-```sh
-./install.sh
-```
-
-It:
-
-1. Copies the `gh44-dark` and `gh44-light` Herdr themes from your `gh44-theme` repo (`gh44-theme/herdr/`). Clone it next to `gh44-herdr`, or this step is skipped. The layout picks `gh44-dark` for dark mode and `paper` for light.
-2. Links the mods in `mods/` into `~/.config/herdr-app/mods`, so edits here are live. Then builds `gh44-files`: a fresh clone of Herdr's `files` panel with the gh44 code colors from `gh44-theme/herdr/gh44-syntax.js`.
-3. Copies every mod in `mods.txt` fresh from its GitHub repo (`main` branch unless the line names another).
-4. Copies `keys.json`, `settings.json` and `layouts/gh44-herdr.json`, and switches to the layout. A different existing file is kept as `<name>.bak-<time>`.
-5. Runs the installer of every mod in `plugins.txt`, then puts `tabbed-changes` back in the Changes slot.
-6. Fails if `herdr-app status` reports errors.
-
-Safe to run again. It replaces your keys and settings with mine.
+1. Clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo for the `gh44-dark` and `gh44-light` themes.
+2. With the Herdr app open, run `./install.sh`. It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`.
+3. In the Work panel, open ⚙ settings and paste a Linear API key (create one in Linear under [Settings › Security & access](https://linear.app/settings/account/security)). GitHub uses your `gh` login.
+4. In the same settings, pick the skills each row runs. Installed gh44 skills are picked for you.
 
 ## What's here
 
 | Path | What |
 |---|---|
-| `layouts/gh44-herdr.json` | The layout, with its theme, panel widths and the plugins' changes |
+| `layouts/gh44-herdr.json` | The layout |
 | `keys.json`, `settings.json` | Keys and settings |
-| `mods/` | My own mods: `hub` (GitHub and Linear work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs; its popup on `cmd-alt-t` installs the herdr-auto-title service, from kryptamine/herdr-auto-title) |
-| `plugins.txt` | Mods with their own installer: `<owner/repo> <mod prefix>` |
-| `mods.txt` | Mods without an installer, copied from GitHub: `<owner/repo> <folder> <name> [branch]`. Now `tabbed-changes` and `revive` |
-| `install.sh` | Sets up this machine from the files here |
+| `mods/` | My own mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods.txt` | Mods without an installer, copied from GitHub |
+| `plugins.txt` | Mods with their own installer |
+| `install.sh` | Sets up this machine |
 | `sync.sh` | Copies the live layout, keys and settings back here |
-| `reload.sh` | Reloads the linked mods (hot reload does not follow symlinks) |
-
-## Adding a mod
-
-1. Install it into the `gh44-herdr` layout.
-2. Record it:
-   - your own mod: build it in `mods/<name>` and run `./install.sh` to link it;
-   - a mod with its own installer: add `<owner/repo> <mod prefix>` to `plugins.txt`;
-   - a mod without an installer: add `<owner/repo> <folder in the repo> <mod name>` to `mods.txt`.
-3. Run `./sync.sh` until it passes, then commit.
-
-`sync.sh` fails on a mod folder that is neither shipped by Herdr, linked from `mods/`, nor listed in `plugins.txt` or `mods.txt`.
-
-## Removing a plugin
-
-Run its installer with `--uninstall` (`curl -fsSL https://raw.githubusercontent.com/<owner/repo>/main/install.sh | sh -s -- --app --uninstall`), delete its line from `plugins.txt`, then run `./sync.sh` and commit.
+| `reload.sh` | Reloads the linked mods |
+| `tests/` | Work panel settings tests: `node --test tests/*.test.js` |

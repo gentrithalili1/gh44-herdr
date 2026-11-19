@@ -1,5 +1,7 @@
-// Linear data through the user's own `linear` CLI login (`linear api`).
-import { exec } from "herdr";
+// Linear data through its GraphQL API, with the user's personal API key. The key sits in a file
+// only the user can read, as the Authorization header curl reads (`-H @file`), so it never
+// shows in the process list.
+import { exec, appHome, readTextFile, writeTextFile } from "herdr";
 import { buildIssueFilter } from "./filters.js";
 
 const ISSUE_LIMIT = 100;
@@ -61,19 +63,99 @@ const toIssue = (n) => ({
   ...toPullRequest({ attachments: n.attachments?.nodes ?? [], isAssignedToMe: Boolean(n.assignee?.isMe) }),
 });
 
-async function request({ query, variables }) {
+const API_URL = "https://api.linear.app/graphql";
+const REQUEST_TIMEOUT_SECONDS = "30";
+const getKeyFolder = () => `${appHome()}/hub`;
+const getKeyFile = () => `${getKeyFolder()}/linear-key`;
+const AUTH_ERROR = "AUTHENTICATION_ERROR";
+
+/** @typedef {{ status: "error", reason: "auth" | "failed", message?: string }} LinearError */
+
+/** @param {unknown} error */
+const toMessage = (error) => (error instanceof Error ? error.message : String(error));
+
+/** @param {string} text */
+const parseJson = (text) => {
   try {
-    const args = ["api", query, "--no-input", ...(variables ? ["--variables-json", JSON.stringify(variables)] : [])];
-    const r = await exec("linear", args);
-    let body = null;
-    try { body = JSON.parse(r.stdout); } catch { body = null; }
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+// reason "auth": no key, or Linear turned it down (its message says why).
+/**
+ * @param {{ query: string, variables?: object, keyFile?: string }} params
+ * @returns {Promise<LinearError | { status: "success", data: any }>}
+ */
+async function request({ query, variables, keyFile = getKeyFile() }) {
+  try {
+    if (!(await readTextFile(keyFile))) return { status: "error", reason: "auth" };
+    const r = await exec("curl", [
+      "-sS", "--max-time", REQUEST_TIMEOUT_SECONDS, "-X", "POST", API_URL,
+      "-H", "Content-Type: application/json", "-H", `@${keyFile}`,
+      "--data-binary", JSON.stringify({ query, variables }),
+    ]);
+    const body = parseJson(r.stdout);
     const error = body?.errors?.[0];
-    if (error?.extensions?.type === "authentication error" || /auth/i.test(r.stderr)) return { status: "error", reason: "auth" };
-    if (error || !body?.data) return { status: "error", reason: "failed", message: error?.message ?? (r.stderr || r.stdout).trim().split("\n")[0] };
+    const message = error?.extensions?.userPresentableMessage ?? error?.message;
+    if (error?.extensions?.code === AUTH_ERROR || error?.extensions?.type === "authentication error") return { status: "error", reason: "auth", message };
+    if (error || !body?.data) return { status: "error", reason: "failed", message: message ?? (r.stderr || r.stdout).trim().split("\n")[0] };
     return { status: "success", data: body.data };
   } catch (error) {
-    return { status: "error", reason: "failed", message: String(error?.message ?? error) };
+    return { status: "error", reason: "failed", message: toMessage(error) };
   }
+}
+
+const VIEWER_QUERY = "query { viewer { name } }";
+
+// Who the saved key belongs to.
+/** @returns {Promise<LinearError | { status: "success", name: string }>} */
+export async function loadLinearViewer() {
+  const r = await request({ query: VIEWER_QUERY });
+  if (r.status !== "success") return r;
+  return { status: "success", name: r.data.viewer.name };
+}
+
+// Checks the key with Linear first, and keeps it only when Linear accepts it. The folder is
+// the user's alone (700) before the key is written, and the file then 600.
+/** @param {string} key @returns {Promise<LinearError | { status: "success", name: string }>} */
+export async function saveLinearKey(key) {
+  const value = key.trim();
+  if (!/^\S+$/.test(value)) return { status: "error", reason: "failed", message: "Paste the key as one word, without spaces" };
+  // Its own file per save, so two saves at once can't swap keys.
+  const pending = `${getKeyFile()}.${Date.now()}-${Math.random().toString(36).slice(2)}.pending`;
+  // Stops the save and removes the key if it was written already.
+  /** @param {string} message @returns {Promise<LinearError>} */
+  const fail = async (message) => {
+    await exec("rm", ["-f", pending]);
+    return { status: "error", reason: "failed", message };
+  };
+  try {
+    for (const args of [["mkdir", "-p", getKeyFolder()], ["chmod", "700", getKeyFolder()]]) {
+      const r = await exec(args[0], args.slice(1));
+      if (r.code !== 0) return await fail(r.stderr.trim() || `${args[0]} failed`);
+    }
+    await writeTextFile(pending, `Authorization: ${value}\n`, null);
+    const locked = await exec("chmod", ["600", pending]);
+    if (locked.code !== 0) return await fail(locked.stderr.trim() || "chmod failed");
+    const r = await request({ query: VIEWER_QUERY, keyFile: pending });
+    if (r.status !== "success") {
+      await exec("rm", ["-f", pending]);
+      return r;
+    }
+    const moved = await exec("mv", ["-f", pending, getKeyFile()]);
+    if (moved.code !== 0) return await fail(moved.stderr.trim() || "mv failed");
+    return { status: "success", name: r.data.viewer.name };
+  } catch (error) {
+    return await fail(toMessage(error));
+  }
+}
+
+/** @returns {Promise<LinearError | { status: "success" }>} */
+export async function removeLinearKey() {
+  const r = await exec("rm", ["-f", getKeyFile()]);
+  return r.code === 0 ? { status: "success" } : { status: "error", reason: "failed", message: r.stderr.trim() };
 }
 
 export async function loadIssues(filters) {
@@ -102,6 +184,7 @@ const MOVE_ISSUE_MUTATION = `mutation($id: String!, $stateId: String!) {
 }`;
 
 // Moves an issue to its team's first started status that is not a review one ("In Progress").
+/** @param {{ id: string, teamId: string }} issue @returns {Promise<LinearError | { status: "success", state: string }>} */
 export async function moveIssueToInProgress(issue) {
   const r = await request({ query: STARTED_STATES_QUERY, variables: { id: issue.teamId } });
   if (r.status !== "success") return r;
