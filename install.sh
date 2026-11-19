@@ -6,7 +6,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOME="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-THEME_REPO="$HERE/../../gh44-theme"
+THEME_REPO="$HERE/../gh44-theme"
 LAYOUT=gh44-herdr
 # Other layouts, kept beside the main one; ctrl-shift-l switches to them.
 EXTRA_LAYOUTS=""
@@ -28,13 +28,13 @@ place() {
   cp "$source" "$target"
 }
 
-# 1. Themes, from the gh44-theme checkout beside gh44-brain.
+# 1. Themes, from the gh44-theme checkout beside gh44-herdr.
 if [ -d "$THEME_REPO/herdr" ]; then
   mkdir -p "$APP_HOME/themes"
   for theme in "$THEME_REPO"/herdr/*.json; do place "$theme" "$APP_HOME/themes/$(basename "$theme")"; done
   echo "themes: copied from gh44-theme"
 else
-  echo "themes: skipped, clone gh44-theme next to gh44-brain and run this again" >&2
+  echo "themes: skipped, clone gh44-theme next to gh44-herdr and run this again" >&2
 fi
 
 # 2. Own mods, linked so edits here are live.
@@ -63,7 +63,7 @@ import { gh44Syntax } from "./gh44-syntax.js";' -e 's/syntax: { keyword: t.ansi5
   grep -q 'gh44Syntax(t)' "$FILES_MOD/main.js" || die "gh44-files: the files mod changed, update the patch in install.sh"
   echo "gh44-files: files panel with gh44 code colors"
 else
-  echo "gh44-files: Herdr's code colors, clone gh44-theme next to gh44-brain for gh44 ones" >&2
+  echo "gh44-files: Herdr's code colors, clone gh44-theme next to gh44-herdr for gh44 ones" >&2
 fi
 herdr-app check "$FILES_MOD" > /dev/null || die "herdr-app check failed for gh44-files"
 
