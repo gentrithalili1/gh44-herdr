@@ -26,6 +26,63 @@ export async function loadHasGh44Theme() {
   }
 }
 
+const GITHUB_OWNER_URL = "https://github.com/gentrithalili1";
+const CLONE_TIMEOUT_MS = 60_000;
+const BRAIN_INSTALL_TIMEOUT_MS = 600_000;
+const ERROR_TAIL_LINES = 3;
+
+/** @typedef {{ status: "success" } | { status: "failed", reason: "notLinked" | "clone" | "install", message?: string }} InstallOutcome */
+
+// The gh44 folder that holds gh44-herdr, from the hub mod's link. null: the mod is not linked.
+async function getGh44Folder() {
+  const link = await exec("readlink", [`${appHome()}/mods/hub`]);
+  const target = link.stdout.trim();
+  if (link.code !== 0 || !target) return null;
+  return target.replace(/\/mods\/hub\/?$/, "").replace(/\/[^/]+$/, "");
+}
+
+/** @param {string} output */
+const lastLines = (output) => output.trim().split("\n").slice(-ERROR_TAIL_LINES).join("\n");
+
+// Clones a gh44 repo next to gh44-herdr, where install.sh looks for it. A clone already there is reused.
+/** @param {{ name: "gh44-theme" | "gh44-brain" }} params @returns {Promise<{ status: "success", folder: string } | InstallOutcome>} */
+async function cloneGh44Repo({ name }) {
+  const parent = await getGh44Folder();
+  if (!parent) return { status: "failed", reason: "notLinked" };
+  const folder = `${parent}/${name}`;
+  if ((await exec("test", ["-d", `${folder}/.git`])).code === 0) return { status: "success", folder };
+  const clone = await exec("git", ["clone", "-q", `${GITHUB_OWNER_URL}/${name}.git`, folder], { timeout: CLONE_TIMEOUT_MS });
+  return clone.code === 0 ? { status: "success", folder } : { status: "failed", reason: "clone", message: lastLines(clone.stderr) };
+}
+
+// gh44-theme: cloned, then its Herdr themes copied into Herdr's themes folder.
+/** @returns {Promise<InstallOutcome>} */
+export async function installGh44Theme() {
+  try {
+    const repo = await cloneGh44Repo({ name: "gh44-theme" });
+    if (repo.status === "failed") return repo;
+    if (!("folder" in repo)) return { status: "failed", reason: "clone" };
+    const copy = await exec("sh", ["-c", 'mkdir -p "$1" && cp "$0"/herdr/*.json "$1"/', repo.folder, `${appHome()}/themes`]);
+    return copy.code === 0 ? { status: "success" } : { status: "failed", reason: "install", message: lastLines(copy.stderr) };
+  } catch (error) {
+    return { status: "failed", reason: "install", message: String(error) };
+  }
+}
+
+// gh44-brain: cloned, then its install.sh links the skills into ~/.claude.
+/** @returns {Promise<InstallOutcome>} */
+export async function installGh44Brain() {
+  try {
+    const repo = await cloneGh44Repo({ name: "gh44-brain" });
+    if (repo.status === "failed") return repo;
+    if (!("folder" in repo)) return { status: "failed", reason: "clone" };
+    const install = await exec("bash", [`${repo.folder}/install.sh`], { cwd: repo.folder, timeout: BRAIN_INSTALL_TIMEOUT_MS });
+    return install.code === 0 ? { status: "success" } : { status: "failed", reason: "install", message: lastLines(install.stderr || install.stdout) };
+  } catch (error) {
+    return { status: "failed", reason: "install", message: String(error) };
+  }
+}
+
 // The skills in ~/.claude/skills: its folders and symlinks, not plain files.
 // [] when the folder doesn't exist; null when it couldn't be listed (unknown, keep the defaults).
 /** @returns {Promise<string[] | null>} */

@@ -6,7 +6,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify } from "herdr";
 import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
-import { loadInstalledSkills, loadHasGh44Theme } from "./actions.js";
+import { loadInstalledSkills, loadHasGh44Theme, installGh44Theme, installGh44Brain } from "./actions.js";
 import {
   getDefaultSkill, shortSkill, getGh44Setup, isUsingGh44Setup, countInstalledSkills, addSkill, removeSkill, setSkillKey, setDefaultSkill, isValidSkillName,
   GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRun,
@@ -43,7 +43,18 @@ const WHERE_TO_RUN_OPTIONS = [
 // Installed skills offered under the Add skill field.
 const SKILL_SUGGESTIONS = 6;
 const GH44_BRAIN_URL = "https://github.com/gentrithalili1/gh44-brain";
-const GH44_THEME_URL = "https://github.com/gentrithalili1/gh44-theme";
+/** @typedef {"theme" | "brain"} Gh44Repo */
+/** @type {Record<Gh44Repo, { name: string, install: () => Promise<import("./actions.js").InstallOutcome> }>} */
+const GH44_REPOS = {
+  theme: { name: "gh44-theme", install: installGh44Theme },
+  brain: { name: "gh44-brain", install: installGh44Brain },
+};
+/** @type {Record<"notLinked" | "clone" | "install", string>} */
+const INSTALL_ERRORS = {
+  notLinked: "The hub mod is not linked from gh44-herdr. Run gh44-herdr/install.sh.",
+  clone: "git clone failed. Check your network and GitHub access.",
+  install: "The install failed.",
+};
 const LINEAR_API_KEYS_URL = "https://linear.app/settings/account/security";
 const SWITCH_HEIGHT = 32;
 const HEADER_HEIGHT = 40;
@@ -76,6 +87,9 @@ export class SettingsView {
     // The Linear API key field, in the settings and in the Linear tab until a key works.
     /** @type {{ status: "idle" | "saving" | "failed", message?: string }} */
     this.keySave = { status: "idle" };
+    // The gh44 repos being installed from the settings right now.
+    /** @type {Set<Gh44Repo>} */
+    this.installing = new Set();
     this.linearKeyInput = InputState.new({ placeholder: "lin_api_…" });
     this.linearKeyInput.set_masked(true);
     this.linearKeyInput.on("submit", (_e, cx) => this.handleSaveLinearKey(cx));
@@ -320,7 +334,7 @@ export class SettingsView {
           children: this.gh44SetupRows(settings),
         }), this.settingsGroup({
           title: "Theme",
-          description: "gh44-dark and gh44-light, for the panel and the code. Clone gh44-theme next to gh44-herdr, then run install.sh again.",
+          description: "gh44-dark and gh44-light from gh44-theme. Run install.sh again for the gh44 code colors in Files.",
           children: this.gh44ThemeRows(),
         })];
       }
@@ -340,7 +354,39 @@ export class SettingsView {
     }
   }
 
-  // Installed, or a button to gh44-theme's page.
+  // Clones and installs gh44-theme or gh44-brain, then checks again what is installed.
+  /** @param {{ cx: import("gpui-kit").Context, repo: Gh44Repo }} params */
+  handleInstall({ cx, repo }) {
+    if (this.installing.has(repo)) return;
+    this.installing.add(repo);
+    cx.notify();
+    const { name, install } = GH44_REPOS[repo];
+    cx.spawn(async (cx) => {
+      const r = await install();
+      this.installing.delete(repo);
+      if (r.status === "success") {
+        notify({ title: `${name} installed`, level: "info" });
+        this.loadSkillList(cx);
+      } else {
+        notify({ title: `Could not install ${name}`, body: r.message || INSTALL_ERRORS[r.reason], level: "warning" });
+      }
+      cx.notify();
+    });
+  }
+
+  // "Install gh44-…", with a spinner while it runs.
+  /** @param {Gh44Repo} repo */
+  installButton(repo) {
+    const t = theme();
+    const isInstalling = this.installing.has(repo);
+    return h_flex().id(`${repo}-install`).h(30).px(10).gap(6).items_center().flex_none().self_start().rounded(6).border(1).border_color(t.accent)
+      .text_size(12).text_color(isInstalling ? t.muted : t.foreground)
+      .when(isInstalling, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900)))
+      .when(!isInstalling, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleInstall({ cx, repo })))
+      .child(isInstalling ? `Installing ${GH44_REPOS[repo].name}…` : `Install ${GH44_REPOS[repo].name}`);
+  }
+
+  // Installed, or a button that installs gh44-theme.
   gh44ThemeRows() {
     const t = theme();
     if (this.session.hasGh44Theme === null) return [];
@@ -349,10 +395,7 @@ export class SettingsView {
         .child(svg(icon("check")).size(12).text_color(palette(t).success))
         .child("Installed")];
     }
-    return [h_flex().id("gh44-theme-install").h(30).px(10).items_center().flex_none().self_start().rounded(6).border(1).border_color(t.accent)
-      .text_size(12).text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => cx.open_url(GH44_THEME_URL))
-      .child("Get gh44-theme")];
+    return [this.installButton("theme")];
   }
 
   // A preview of the gh44 skills per tab (dim when not installed) and a button that applies them
@@ -382,10 +425,7 @@ export class SettingsView {
           .child(h_flex().flex_1().min_w(0).flex_wrap().gap(4).children(setup[tab].list.map((e) => skillChip({ tab, name: e.name }))));
       }));
     const button = hasMissing
-      ? h_flex().id("gh44-setup-install").h(30).px(10).items_center().flex_none().rounded(6).border(1).border_color(t.accent)
-        .text_size(12).text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => cx.open_url(GH44_BRAIN_URL))
-        .child("Install gh44-brain")
+      ? this.installButton("brain")
       : isInUse
       ? h_flex().id("gh44-setup-use").h(30).px(10).gap(6).items_center().flex_none().rounded(6).border(1).border_color(t.border)
         .text_size(12).text_color(t.muted)
