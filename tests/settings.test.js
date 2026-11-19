@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTicketSkills, getTabSkills, getKeySkills, getKeyHints,
   addSkill, removeSkill, setSkillKey, setDefaultSkill, hasNoDefaults, isValidSkillName,
-  getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills,
+  getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills, getRunnableSkills,
 } from "../mods/hub/settings.js";
 
 const { skills } = getSettings({ saved: undefined });
@@ -204,4 +204,16 @@ test("the setup counts each of its 6 skills once against what is installed", () 
   const skills = getGh44Setup();
   assert.deepEqual(countInstalledSkills({ skills, installedSkills: ["gh44-plan", "gh44-code-review", "other"] }), { installed: 2, total: 6 });
   assert.deepEqual(countInstalledSkills({ skills, installedSkills: [] }), { installed: 0, total: 6 });
+});
+
+test("rows skip saved skills that are not installed, and keep plugin skills", () => {
+  const saved = addSkill({ skills, tab: "linear", skill: "acme:plan" });
+  const none = getRunnableSkills({ skills: saved, installedSkills: [] });
+  assert.deepEqual(getTabSkills({ skills: none, tab: "linear" }), ["acme:plan"]);
+  assert.equal(getDefaultSkill({ skills: none, tab: "github", situation: "othersPullRequest" }), null);
+  assert.equal(hasNoDefaults({ skills: none, tab: "linear" }), true);
+  const some = getRunnableSkills({ skills: saved, installedSkills: ["gh44-plan"] });
+  assert.equal(getDefaultSkill({ skills: some, tab: "linear", situation: "notStarted" }), "gh44-plan");
+  assert.equal(getDefaultSkill({ skills: some, tab: "linear", situation: "inProgress" }), null);
+  assert.deepEqual(getRunnableSkills({ skills: saved, installedSkills: null }), saved);
 });

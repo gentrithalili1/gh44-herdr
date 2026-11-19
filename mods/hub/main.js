@@ -20,7 +20,7 @@ import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill } from "./actio
 import { SettingsView } from "./settings-view.js";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTabSkills, getTicketSkills,
-  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab,
+  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills,
 } from "./settings.js";
 
 const NO_MENU_ROW = -1;
@@ -147,6 +147,9 @@ const session = {
   // Folder names in ~/.claude/skills; null until listed.
   /** @type {string[] | null} */
   installedSkills: null,
+  // Whether gh44-theme is installed; null until checked.
+  /** @type {boolean | null} */
+  hasGh44Theme: null,
 };
 /** @type {Record<string, "general" | "github" | "linear">} */
 const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear" };
@@ -197,6 +200,8 @@ const saveSkills = ({ tab, skills }) => {
 let frame = null;
 const readPanelSettings = () => getSettings({ saved: shared(STORE.settings), installedSkills: session.installedSkills });
 const getPanelSettings = () => frame?.settings ?? readPanelSettings();
+// The skills rows run: the settings' ones without those not installed.
+const getRowSkills = () => getRunnableSkills({ skills: getPanelSettings().skills, installedSkills: session.installedSkills });
 /** @param {string} skill */
 const getRole = (skill) => getSkillRole({ skills: getPanelSettings().skills, skill });
 const currentTab = () => frame?.tab ?? getShownTab({ saved: shared(STORE.tab), settings: getPanelSettings() });
@@ -618,7 +623,7 @@ export default class Hub extends View {
       case "1": if (getPanelSettings().shouldShowGithub) setShared(STORE.tab, "github"); break;
       case "2": if (getPanelSettings().shouldShowLinear) setShared(STORE.tab, "linear"); break;
       default: {
-        const skill = getKeySkills({ skills: getPanelSettings().skills, tab })[e.key];
+        const skill = getKeySkills({ skills: getRowSkills(), tab })[e.key];
         if (!skill || !row) return;
         row.start(skill);
       }
@@ -997,7 +1002,7 @@ export default class Hub extends View {
   // A tab where no kind of row runs a skill (a fresh install): a line pointing to the settings.
   /** @param {"github" | "linear"} tab */
   skillsBanner(tab) {
-    if (session.installedSkills === null || !hasNoDefaults({ skills: getPanelSettings().skills, tab })) return [];
+    if (session.installedSkills === null || !hasNoDefaults({ skills: getRowSkills(), tab })) return [];
     return [this.note({
       id: `${tab}-skills-banner`,
       text: "Choose which skills your rows run.",
@@ -1088,7 +1093,7 @@ export default class Hub extends View {
 
   pullRequestEntry({ pr, group }) {
     const colors = palette(theme());
-    const skills = getPanelSettings().skills;
+    const skills = getRowSkills();
     const skill = getDefaultSkill({ skills, tab: "github", situation: getGithubSituation({ pr, login: session.login }) });
     const target = { ref: pr.url, label: `#${pr.number}`, folder: this.folder };
     const ci = CI_STATUS[pr.ci];
@@ -1215,8 +1220,7 @@ export default class Hub extends View {
 
   issueEntry({ issue, showAssignee }) {
     const colors = palette(theme());
-    const settings = getPanelSettings();
-    const skill = getDefaultSkill({ skills: settings.skills, tab: "linear", situation: getLinearSituation(issue) });
+    const skill = getDefaultSkill({ skills: getRowSkills(), tab: "linear", situation: getLinearSituation(issue) });
     const stage = getIssueStage(issue);
     // A space already on the ticket's branch (it may be in another repo), else the focused repo's worktrees.
     const space = issue.branch ? spaces().find((sp) => sp.branch === issue.branch) : undefined;
@@ -1226,7 +1230,7 @@ export default class Hub extends View {
       ...(worktree ? { worktree } : {}), ...(space ? { space: space.id } : {}),
     };
     const agent = findAgentFor({ label: issue.identifier, branch: issue.branch });
-    const skills = getTicketSkills({ skills: settings.skills, issue });
+    const skills = getTicketSkills({ skills: getRowSkills(), issue });
     const link = toLinearLink(issue.url);
     const menu = { skills, target, isTicket: true, links: [link] };
     const place = skill ? getRunPlace({ skill, target }) : "here";
@@ -1595,6 +1599,6 @@ export default class Hub extends View {
           .child(svg(icon("settings")).size(14))))
       .child(this.mainView(tab))
       .when(settings.shouldShowKeyHints && !this.settingsView.isOpen, (el) => el.child(div().flex_none().px(GUTTER).py(6).border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim).truncate()
-        .child(getKeyHints({ skills: settings.skills, tab }))));
+        .child(getKeyHints({ skills: getRowSkills(), tab }))));
   }
 }

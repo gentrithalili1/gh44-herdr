@@ -6,10 +6,10 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify } from "herdr";
 import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
-import { loadInstalledSkills } from "./actions.js";
+import { loadInstalledSkills, loadHasGh44Theme, installGh44Theme, installGh44Brain } from "./actions.js";
 import {
   getDefaultSkill, shortSkill, getGh44Setup, isUsingGh44Setup, countInstalledSkills, addSkill, removeSkill, setSkillKey, setDefaultSkill, isValidSkillName,
-  GITHUB_SITUATIONS, LINEAR_SITUATIONS,
+  GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRun,
 } from "./settings.js";
 
 /** @typedef {"general" | "github" | "linear"} SectionId */
@@ -19,6 +19,7 @@ import {
  *   login: string | null,
  *   linearAccount: { status: "idle" | "checking" | "connected" | "missing" | "failed", name?: string, message?: string },
  *   installedSkills: string[] | null,
+ *   hasGh44Theme: boolean | null,
  * }} Session
  */
 
@@ -42,6 +43,18 @@ const WHERE_TO_RUN_OPTIONS = [
 // Installed skills offered under the Add skill field.
 const SKILL_SUGGESTIONS = 6;
 const GH44_BRAIN_URL = "https://github.com/gentrithalili1/gh44-brain";
+/** @typedef {"theme" | "brain"} Gh44Repo */
+/** @type {Record<Gh44Repo, { name: string, install: () => Promise<import("./actions.js").InstallOutcome> }>} */
+const GH44_REPOS = {
+  theme: { name: "gh44-theme", install: installGh44Theme },
+  brain: { name: "gh44-brain", install: installGh44Brain },
+};
+/** @type {Record<"notLinked" | "clone" | "install", string>} */
+const INSTALL_ERRORS = {
+  notLinked: "The hub mod is not linked from gh44-herdr. Run gh44-herdr/install.sh.",
+  clone: "git clone failed. Check your network and GitHub access.",
+  install: "The install failed.",
+};
 const LINEAR_API_KEYS_URL = "https://linear.app/settings/account/security";
 const SWITCH_HEIGHT = 32;
 const HEADER_HEIGHT = 40;
@@ -74,6 +87,9 @@ export class SettingsView {
     // The Linear API key field, in the settings and in the Linear tab until a key works.
     /** @type {{ status: "idle" | "saving" | "failed", message?: string }} */
     this.keySave = { status: "idle" };
+    // The gh44 repos being installed from the settings right now.
+    /** @type {Set<Gh44Repo>} */
+    this.installing = new Set();
     this.linearKeyInput = InputState.new({ placeholder: "lin_api_…" });
     this.linearKeyInput.set_masked(true);
     this.linearKeyInput.on("submit", (_e, cx) => this.handleSaveLinearKey(cx));
@@ -136,11 +152,12 @@ export class SettingsView {
     this.focusPanel();
   }
 
-  // A skill added to ~/.claude/skills shows up the next time the settings open.
+  // A skill added to ~/.claude/skills, or the gh44 theme, shows up the next time the settings open.
   /** @param {import("gpui-kit").Context} cx */
   loadSkillList(cx) {
     cx.spawn(async (cx) => {
       this.session.installedSkills = (await loadInstalledSkills()) ?? this.session.installedSkills;
+      this.session.hasGh44Theme = (await loadHasGh44Theme()) ?? this.session.hasGh44Theme;
       cx.notify();
     });
   }
@@ -315,6 +332,10 @@ export class SettingsView {
           title: "Suggested setup",
           description: "The gh44 skills from gh44-brain: plan, implement and review tickets and PRs, one skill per step.",
           children: this.gh44SetupRows(settings),
+        }), this.settingsGroup({
+          title: "Theme",
+          description: "gh44-dark and gh44-light from gh44-theme. Run install.sh again for the gh44 code colors in Files.",
+          children: this.gh44ThemeRows(),
         })];
       }
       case "github":
@@ -331,6 +352,50 @@ export class SettingsView {
         return unknownSection;
       }
     }
+  }
+
+  // Clones and installs gh44-theme or gh44-brain, then checks again what is installed.
+  /** @param {{ cx: import("gpui-kit").Context, repo: Gh44Repo }} params */
+  handleInstall({ cx, repo }) {
+    if (this.installing.has(repo)) return;
+    this.installing.add(repo);
+    cx.notify();
+    const { name, install } = GH44_REPOS[repo];
+    cx.spawn(async (cx) => {
+      const r = await install();
+      this.installing.delete(repo);
+      if (r.status === "success") {
+        notify({ title: `${name} installed`, level: "info" });
+        this.loadSkillList(cx);
+      } else {
+        notify({ title: `Could not install ${name}`, body: r.message || INSTALL_ERRORS[r.reason], level: "warning" });
+      }
+      cx.notify();
+    });
+  }
+
+  // "Install gh44-…", with a spinner while it runs.
+  /** @param {Gh44Repo} repo */
+  installButton(repo) {
+    const t = theme();
+    const isInstalling = this.installing.has(repo);
+    return h_flex().id(`${repo}-install`).h(30).px(10).gap(6).items_center().flex_none().self_start().rounded(6).border(1).border_color(t.accent)
+      .text_size(12).text_color(isInstalling ? t.muted : t.foreground)
+      .when(isInstalling, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900)))
+      .when(!isInstalling, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleInstall({ cx, repo })))
+      .child(isInstalling ? `Installing ${GH44_REPOS[repo].name}…` : `Install ${GH44_REPOS[repo].name}`);
+  }
+
+  // Installed, or a button that installs gh44-theme.
+  gh44ThemeRows() {
+    const t = theme();
+    if (this.session.hasGh44Theme === null) return [];
+    if (this.session.hasGh44Theme) {
+      return [h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
+        .child(svg(icon("check")).size(12).text_color(palette(t).success))
+        .child("Installed")];
+    }
+    return [this.installButton("theme")];
   }
 
   // A preview of the gh44 skills per tab (dim when not installed) and a button that applies them
@@ -359,7 +424,9 @@ export class SettingsView {
             .child(section.label))
           .child(h_flex().flex_1().min_w(0).flex_wrap().gap(4).children(setup[tab].list.map((e) => skillChip({ tab, name: e.name }))));
       }));
-    const button = isInUse
+    const button = hasMissing
+      ? this.installButton("brain")
+      : isInUse
       ? h_flex().id("gh44-setup-use").h(30).px(10).gap(6).items_center().flex_none().rounded(6).border(1).border_color(t.border)
         .text_size(12).text_color(t.muted)
         .child(svg(icon("check")).size(12).text_color(palette(t).success))
@@ -377,7 +444,7 @@ export class SettingsView {
         .child(button)
         .when(count !== null, (el) => el.child(div().text_size(11.5).text_color(hasMissing ? palette(t).warning : t.dim)
           .child(`${count?.installed} of ${count?.total} installed`))),
-      ...(hasMissing && !isInUse ? [div().text_size(11.5).text_color(t.dim).child("Missing skills show as \"open\" until you install gh44-brain.")] : []),
+      ...(hasMissing ? [div().text_size(11.5).text_color(t.dim).child("Rows skip missing skills and show \"open\" until they are installed.")] : []),
     ];
   }
 
@@ -408,8 +475,11 @@ export class SettingsView {
   skillListRows({ tab, skills }) {
     const t = theme();
     const list = skills[tab].list;
+    /** @param {string} skill */
+    const isRunnable = (skill) => canRun({ skill, installedSkills: this.session.installedSkills });
     const skillRows = list.map((entry) => h_flex().id(`skill-${tab}-${entry.name}`).h(28).px(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(entry.name))
+      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable(entry.name) ? t.foreground : t.dim).child(entry.name))
+      .when(!isRunnable(entry.name), (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child("not installed")))
       .child(this.skillKeyCell({ tab, entry }))
       .child(div().id(`skill-remove-${tab}-${entry.name}`).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
         .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Remove this skill")
