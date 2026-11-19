@@ -896,10 +896,12 @@ export default class Hub extends View {
   }
 
   // A scrolling list whose direct children are the rows, so the keyboard can scroll to one.
-  list({ id, state, entries }) {
+  // An empty, loading or failed list shows its state below the notes, so a note like the
+  // merged worktrees one still shows on a tab with no rows.
+  list({ id, state, notes, entries }) {
     return v_flex().id(id).flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.scroll)
       .on_mouse_down("left", () => this.handle.focus())
-      .children(state ? [state] : entries);
+      .children(state ? [...notes, state] : entries);
   }
 
   // An agent already on it: open it. Else resume a space on its branch, else start the next skill.
@@ -1181,11 +1183,12 @@ export default class Hub extends View {
       hasFilters: defs.some((def) => countPicked({ store, def }) > 0) || search.trim() !== "",
     });
     // Notes, headers and rows side by side, so a row's child index is known for scrolling.
-    const elements = [
+    const notes = [
       ...this.skillsBanner("github"),
       ...this.cleanupNote(),
       ...(isPasted ? [this.note({ id: "gh-pasted", text: "Running your GitHub query as is. Show and Filters are off until you clear it." })] : []),
     ];
+    const elements = [...notes];
     const selectable = [];
     this.followShownTab({ tab: "github", items: shown, label: (pr) => `#${pr.number}` });
     for (const group of groupPullRequests({ items: shown, login: session.login })) {
@@ -1213,7 +1216,7 @@ export default class Hub extends View {
       .child(v_flex().px(GUTTER).pt(12).pb(12).gap(6).border_b(1).border_color(t.border)
         .child(this.searchRow({ store, scopeDef: { title: "Show", field: "scope", isMulti: false, options: GITHUB_SCOPES }, state: this.githubSearch, defs })))
       .when(Boolean(repo), (el) => el.child(this.repoLink(repo)))
-      .child(this.list({ id: "gh-list", state, entries: [...elements, ...footer] }));
+      .child(this.list({ id: "gh-list", state, notes, entries: [...elements, ...footer] }));
   }
 
   // ---------- Linear ----------
@@ -1280,7 +1283,8 @@ export default class Hub extends View {
       hasFilters: defs.some((def) => countPicked({ store, def }) > 0) || search.trim() !== "",
     });
     // Notes, headers and rows side by side, so a row's child index is known for scrolling.
-    const elements = [...this.skillsBanner("linear"), ...this.cleanupNote()];
+    const notes = [...this.skillsBanner("linear"), ...this.cleanupNote()];
+    const elements = [...notes];
     const selectable = [];
     this.followShownTab({ tab: "linear", items: shown, label: (issue) => issue.identifier });
     for (const group of groupIssuesByState(shown, f.sort)) {
@@ -1300,7 +1304,7 @@ export default class Hub extends View {
     return v_flex().flex_1().min_h(0)
       .child(v_flex().px(GUTTER).pt(12).pb(12).gap(6).border_b(1).border_color(t.border)
         .child(this.searchRow({ store, scopeDef: { title: "Show", field: "mine", isMulti: false, options: LINEAR_SCOPES }, state: this.linearSearch, defs })))
-      .child(this.list({ id: "ln-list", state, entries: elements }));
+      .child(this.list({ id: "ln-list", state, notes, entries: elements }));
   }
 
   // ---------- settings ----------
