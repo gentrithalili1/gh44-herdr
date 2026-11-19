@@ -6,8 +6,6 @@ My setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, 
 
 The layout's **Work panel** (the `hub` mod) lists your Linear tickets and GitHub PRs. Each row has a button that runs the next skill in its own Claude tab, in the ticket's worktree.
 
-![Work panel](docs/work-panel.png)
-
 By default the buttons run the gh44 skills from [gh44-brain](https://github.com/gentrithalili1/gh44-brain): `plan`, `implement`, `address-review`, `code-review` and `resolve-conflicts`. To run your own skills on tickets and PRs instead, change the skill list, keys and per-row defaults in the panel's ⚙ settings. A row with no skill picked shows `open`, which opens the PR or ticket.
 
 - **Main button** picks the skill for the row: `plan` for a new ticket, `implement` for one in progress, `address-review` for your PR, `code-review` for someone else's.
@@ -27,10 +25,12 @@ Thanks to the Herdr community for these:
 
 ## Install
 
-1. Clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo for the `gh44-dark` and `gh44-light` themes.
-2. With the Herdr app open, run `./install.sh`. It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`.
-3. In the Work panel, open ⚙ settings and paste a Linear API key (create one in Linear under [Settings › Security & access](https://linear.app/settings/account/security)). GitHub uses your `gh` login.
-4. In the same settings, pick the skills each row runs. Installed gh44 skills are picked for you.
+1. With the Herdr app open, run `./install.sh`. It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`.
+2. In the Work panel's ⚙ settings, pick the skills each row runs. Installed gh44 skills are picked for you.
+
+## Theme
+
+Optional: clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo before installing for the `gh44-dark` and `gh44-light` themes. Without it Herdr keeps its own colors.
 
 ## What's here
 
