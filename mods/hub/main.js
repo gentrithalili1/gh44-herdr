@@ -18,6 +18,7 @@ import { loadIssues, loadLinearMeta } from "./linear.js";
 import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
+import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTabSkills, getTicketSkills,
   getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills,
@@ -147,9 +148,6 @@ const session = {
   // Folder names in ~/.claude/skills; null until listed.
   /** @type {string[] | null} */
   installedSkills: null,
-  // Whether gh44-theme is installed; null until checked.
-  /** @type {boolean | null} */
-  hasGh44Theme: null,
 };
 /** @type {Record<string, "general" | "github" | "linear">} */
 const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear" };
@@ -293,6 +291,10 @@ function startTicketSkill({ skill, menu }) {
 
 export default class Hub extends View {
   init(_props, cx) {
+    if (props()?.dialog === GH44_DIALOG) {
+      this.gh44Dialog = new Gh44Dialog({ cx, getSettings: readPanelSettings, patchSettings });
+      return;
+    }
     if (props()?.menu) {
       this.isMenu = true;
       this.expanded = null;
@@ -361,6 +363,8 @@ export default class Hub extends View {
         if (command === "settings") this.settingsView.open({ cx });
         const section = SETTINGS_COMMANDS[command];
         if (section) this.settingsView.open({ cx, section });
+        // `herdr-app do hub.gh44-skills`: the gh44 skills dialog.
+        if (command === "gh44-skills") openGh44Dialog();
         if (command === "cleanup") await this.runCleanup(cx);
         if (command === "start" && pendingStart) {
           const start = pendingStart;
@@ -1552,6 +1556,7 @@ export default class Hub extends View {
   }
 
   render(cx) {
+    if (this.gh44Dialog) return this.gh44Dialog.render();
     if (this.isMenu) return this.menuView();
     const settings = readPanelSettings();
     frame = { settings, tab: getShownTab({ saved: shared(STORE.tab), settings }) };
