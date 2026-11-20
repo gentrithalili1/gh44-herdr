@@ -4,14 +4,12 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify } from "herdr";
-import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
+import { icon, palette, radioMark, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
-import { loadInstalledSkills } from "./actions.js";
+import { loadInstalledSkills, uninstallGh44Herdr } from "./actions.js";
 import { openGh44Dialog } from "./gh44-dialog.js";
-import {
-  getDefaultSkill, shortSkill, addSkill, removeSkill, setSkillKey, setDefaultSkill, isValidSkillName,
-  GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRun,
-} from "./settings.js";
+import { CaseEditor } from "./case-editor.js";
+import { addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRun, ASK_ACTION, ASK_DESCRIPTION } from "./settings.js";
 
 /** @typedef {"general" | "github" | "linear"} SectionId */
 /** @typedef {"linearKey" | "skillKey" | "addSkill"} InputId */
@@ -44,7 +42,13 @@ const WHERE_TO_RUN_OPTIONS = [
 const SKILL_SUGGESTIONS = 6;
 const LINEAR_API_KEYS_URL = "https://linear.app/settings/account/security";
 const SWITCH_HEIGHT = 32;
-const HEADER_HEIGHT = 40;
+// How long "Click again to uninstall" waits for the second click.
+const UNINSTALL_CONFIRM_MS = 5_000;
+/** @type {Record<"notLinked" | "start", string>} */
+const UNINSTALL_ERRORS = {
+  notLinked: "The hub mod is not linked from gh44-herdr, so its uninstall.sh is not known.",
+  start: "uninstall.sh did not start.",
+};
 
 export class SettingsView {
   /**
@@ -74,6 +78,9 @@ export class SettingsView {
     // The Linear API key field, in the settings and in the Linear tab until a key works.
     /** @type {{ status: "idle" | "saving" | "failed", message?: string }} */
     this.keySave = { status: "idle" };
+    // Uninstall takes a second click within UNINSTALL_CONFIRM_MS; confirmedAt tells one click from the next.
+    /** @type {{ status: "idle" | "confirming" | "starting", confirmedAt?: number }} */
+    this.uninstall = { status: "idle" };
     this.linearKeyInput = InputState.new({ placeholder: "lin_api_…" });
     this.linearKeyInput.set_masked(true);
     this.linearKeyInput.on("submit", (_e, cx) => this.handleSaveLinearKey(cx));
@@ -83,9 +90,7 @@ export class SettingsView {
     this.keyEditing = null;
     /** @type {"github" | "linear" | null} */
     this.addingTab = null;
-    // "<tab>:<situation>" whose default picker is open.
-    /** @type {string | null} */
-    this.openPicker = null;
+    this.caseEditor = new CaseEditor({ saveSkills });
     this.skillKeyInput = InputState.new({ placeholder: "" });
     this.skillKeyInput.on("change", (_e, cx) => this.handleSkillKeyChange(cx));
     this.trackFocus({ input: this.skillKeyInput, id: "skillKey" });
@@ -132,7 +137,7 @@ export class SettingsView {
     this.isOpen = false;
     this.keyEditing = null;
     this.addingTab = null;
-    this.openPicker = null;
+    this.caseEditor.collapse();
     this.focusPanel();
   }
 
@@ -256,21 +261,22 @@ export class SettingsView {
         .child("Remove"))];
   }
 
-  // ← Settings, the General · GitHub · Linear switch, then the picked section.
-  // It takes the list's place until ← or Esc.
+  // The General · GitHub · Linear switch, then the picked section.
+  // It takes the list's place until Esc or ⚙.
   render() {
     const t = theme();
     const settings = this.getSettings();
-    const back = h_flex().id("settings-back").h(26).px(6).gap(6).items_center().rounded(6).cursor_pointer()
-      .text_size(13).font_semibold().text_color(t.foreground).hover((s) => s.bg(t.hover)).tooltip("Back to the list (Esc)")
-      .on_click((_e, cx) => { this.close(); cx.notify(); })
-      .child(svg(icon("chevron-left")).size(14).text_color(t.muted))
-      .child("Settings");
     return v_flex().flex_1().min_h(0)
-      .child(h_flex().flex_none().h(HEADER_HEIGHT).px(GUTTER - 6).items_center().border_b(1).border_color(t.border).child(back))
       .child(div().flex_none().px(GUTTER).pt(12).pb(12).border_b(1).border_color(t.border).child(this.sectionSwitch()))
       .child(v_flex().id("settings-list").flex_1().min_h(0).overflow_y_scrollbar().px(GUTTER).pt(14).pb(14).gap(18)
-        .children(this.settingsGroups(settings)));
+        .children(this.settingsGroups(settings)))
+      // General keeps Uninstall pinned at the bottom, below the scrolling groups.
+      .when(this.sectionId === "general", (el) => el.child(div().flex_none().px(GUTTER).pt(14).pb(14).border_t(1).border_color(t.border)
+        .child(this.settingsGroup({
+          title: "Uninstall",
+          description: "Removes the gh44-herdr layout, mods and themes, and puts your keys and settings back from their backup.",
+          children: [this.uninstallButton()],
+        }))));
   }
 
   // [⚙ General | GitHub | Linear]: a full-width segmented control. Every segment keeps a 1px
@@ -284,7 +290,7 @@ export class SettingsView {
           .border(1).text_size(12.5)
           .when(isOn, (el) => el.bg(t.raised).border_color(t.border).text_color(t.foreground).font_medium())
           .when(!isOn, (el) => el.border_color("#00000000").text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
-            .on_click((_e, cx) => { this.sectionId = section.id; this.openPicker = null; cx.notify(); }))
+            .on_click((_e, cx) => { this.sectionId = section.id; this.caseEditor.collapse(); cx.notify(); }))
           .child(svg(icon(section.iconName)).size(13).flex_none().text_color(isOn ? t.accent : t.muted))
           .child(section.label);
       }));
@@ -340,6 +346,56 @@ export class SettingsView {
         .child("View"));
   }
 
+  // First click: asks for a second one within UNINSTALL_CONFIRM_MS. Second click: runs uninstall.sh.
+  /** @param {import("gpui-kit").Context} cx */
+  handleUninstall(cx) {
+    const status = this.uninstall.status;
+    switch (status) {
+      case "idle": {
+        const confirmedAt = Date.now();
+        this.uninstall = { status: "confirming", confirmedAt };
+        cx.spawn(async (cx) => {
+          await cx.sleep(UNINSTALL_CONFIRM_MS);
+          if (this.uninstall.confirmedAt !== confirmedAt || this.uninstall.status !== "confirming") return;
+          this.uninstall = { status: "idle" };
+          cx.notify();
+        });
+        break;
+      }
+      case "confirming":
+        this.uninstall = { status: "starting" };
+        cx.spawn(async (cx) => {
+          const r = await uninstallGh44Herdr();
+          this.uninstall = { status: "idle" };
+          if (r.status === "started") notify({ title: "Uninstalling gh44-herdr", body: "Herdr switches to its main layout.", level: "info" });
+          else notify({ title: "Could not uninstall gh44-herdr", body: r.message || UNINSTALL_ERRORS[r.reason], level: "warning" });
+          cx.notify();
+        });
+        break;
+      case "starting":
+        return;
+      default: {
+        /** @type {never} */
+        const unknownStatus = status;
+        return unknownStatus;
+      }
+    }
+    cx.notify();
+  }
+
+  // A red button; its label asks for the second click while it waits for one.
+  uninstallButton() {
+    const t = theme();
+    const danger = palette(t).danger;
+    const status = this.uninstall.status;
+    const label = status === "confirming" ? "Click again to uninstall" : status === "starting" ? "Uninstalling…" : "Uninstall gh44-herdr";
+    return h_flex().id("gh44-uninstall").h(28).px(12).flex_none().self_start().items_center().rounded(6).border(1).border_color(danger)
+      .text_size(12).text_color(danger).font_medium()
+      .when(status === "confirming", (el) => el.bg(t.hover))
+      .when(status !== "starting", (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleUninstall(cx)))
+      .child(label);
+  }
+
   // "Where runs go": one choice; review skills never ask either way.
   /** @param {import("./settings.js").Settings} settings */
   whereToRunRows(settings) {
@@ -349,36 +405,45 @@ export class SettingsView {
     }));
   }
 
-  // A tab's "Skills" and "Default for each row" groups.
+  // A tab's "Actions" and "By case" groups.
   /** @param {{ tab: "github" | "linear", situations: { id: import("./settings.js").Situation, label: string }[], skills: import("./settings.js").Skills }} params */
   skillGroups({ tab, situations, skills }) {
     return [
-      this.settingsGroup({ title: "Skills", description: "What the ▾ menu on a row offers, and the key that starts each one.", children: this.skillListRows({ tab, skills }) }),
+      this.settingsGroup({ title: "Actions", description: "What the ▾ menu on a row offers, and the key that starts each one.", children: this.skillListRows({ tab, skills }) }),
       this.settingsGroup({
-        title: "Default for each row",
-        description: "The skill a row's main button runs. No skill: the button opens the PR or ticket.",
-        children: situations.flatMap((situation) => this.defaultPickerRows({ tab, situation, skills })),
+        title: "By case",
+        description: "What each kind of PR or ticket runs and shows.",
+        children: this.caseEditor.rows({ tab, situations, skills }),
       }),
     ];
   }
 
-  // A tab's skills (name, key letter, remove), then Add skill.
+  // A tab's actions (name, key letter, remove), then Add skill. Ask is built in: no remove.
   /** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills }} params */
   skillListRows({ tab, skills }) {
     const t = theme();
     const list = skills[tab].list;
     /** @param {string} skill */
     const isRunnable = (skill) => canRun({ skill, installedSkills: this.session.installedSkills });
-    const skillRows = list.map((entry) => h_flex().id(`skill-${tab}-${entry.name}`).h(28).px(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable(entry.name) ? t.foreground : t.dim).child(entry.name))
-      .when(!isRunnable(entry.name), (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child("not installed")))
-      .child(this.skillKeyCell({ tab, entry }))
-      .child(div().id(`skill-remove-${tab}-${entry.name}`).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
-        .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Remove this skill")
-        .on_click((_e, cx) => { this.saveSkills({ tab, skills: removeSkill({ skills, tab, skill: entry.name }) }); cx.notify(); })
-        .child(svg(icon("x")).size(12))));
-    const empty = list.length === 0 ? [div().px(6).text_size(12).text_color(t.dim).child("No skills yet.")] : [];
-    return [...empty, ...skillRows, this.addSkillRow({ tab, list })];
+    const skillRows = list.map((entry) => {
+      const isAsk = entry.name === ASK_ACTION;
+      return h_flex().id(`skill-${tab}-${entry.name}`).h(28).px(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable(entry.name) ? t.foreground : t.dim).child(entry.name))
+        .when(!isRunnable(entry.name), (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child("not installed")))
+        .when(isAsk, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).tooltip(ASK_DESCRIPTION).child("built in")))
+        .child(this.skillKeyCell({ tab, entry }))
+        .child(isAsk ? div().size(22).flex_none() : this.removeSkillButton({ tab, skills, skill: entry.name }));
+    });
+    return [...skillRows, this.addSkillRow({ tab, list })];
+  }
+
+  /** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills, skill: string }} params */
+  removeSkillButton({ tab, skills, skill }) {
+    const t = theme();
+    return div().id(`skill-remove-${tab}-${skill}`).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
+      .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Remove this skill")
+      .on_click((_e, cx) => { this.saveSkills({ tab, skills: removeSkill({ skills, tab, skill }) }); cx.notify(); })
+      .child(svg(icon("x")).size(12));
   }
 
   // The key letter: a small box; clicking it takes the next letter typed.
@@ -450,38 +515,6 @@ export class SettingsView {
         .child("A skill name is one word: letters, digits, _ : . or -")));
   }
 
-  // A kind of row and the skill it runs; clicking opens the choices below it.
-  /** @param {{ tab: "github" | "linear", situation: { id: import("./settings.js").Situation, label: string }, skills: import("./settings.js").Skills }} params */
-  defaultPickerRows({ tab, situation, skills }) {
-    const t = theme();
-    const pickerId = `${tab}:${situation.id}`;
-    const isOpen = this.openPicker === pickerId;
-    const current = getDefaultSkill({ skills, tab, situation: situation.id });
-    const header = h_flex().id(`default-${pickerId}`).h(28).px(6).gap(8).items_center().rounded(6).cursor_pointer()
-      .text_size(12.5).bg(isOpen ? t.hover : t.background).hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { this.openPicker = isOpen ? null : pickerId; cx.notify(); })
-      .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(situation.label))
-      .child(div().text_color(current ? t.foreground : t.dim).child(current ? shortSkill(current) : "open"))
-      .child(svg(icon(isOpen ? "chevron-up" : "chevron")).size(12).text_color(t.muted));
-    if (!isOpen) return [header];
-    /** @param {string | null} skill @returns {(e: unknown, cx: import("gpui-kit").Context) => void} */
-    const choose = (skill) => (_e, cx) => {
-      this.saveSkills({ tab, skills: setDefaultSkill({ skills, tab, situation: situation.id, skill }) });
-      this.openPicker = null;
-      cx.notify();
-    };
-    /** @param {{ id: string, label: string, isChecked: boolean, onClick: (e: unknown, cx: import("gpui-kit").Context) => void }} params */
-    const option = ({ id, label, isChecked, onClick }) => h_flex().id(`default-${pickerId}-${id}`).h(26).pl(18).pr(6).gap(8).items_center().rounded(6).cursor_pointer()
-      .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover)).on_click(onClick)
-      .child(svg(icon(isChecked ? "checkbox-checked" : "checkbox")).size(13).flex_none().text_color(isChecked ? t.accent : t.dim))
-      .child(label);
-    return [
-      header,
-      ...skills[tab].list.map((e) => option({ id: e.name, label: e.name, isChecked: e.name === current, onClick: choose(e.name) })),
-      option({ id: "none", label: "No skill: the button opens it", isChecked: current === null, onClick: choose(null) }),
-    ];
-  }
-
   /** @param {{ title: string, description: string, children: ReturnType<typeof h_flex>[] }} params */
   settingsGroup({ title, description, children }) {
     const t = theme();
@@ -511,8 +544,7 @@ export class SettingsView {
     return h_flex().id(`settings-choice-${id}`).h(28).px(6).gap(8).items_center().rounded(6).cursor_pointer()
       .text_size(12.5).text_color(t.foreground).hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => { onPick(); cx.notify(); })
-      .child(div().size(14).flex_none().flex().items_center().justify_center().rounded(7).border(1.5).border_color(isOn ? t.accent : t.dim)
-        .when(isOn, (el) => el.child(div().size(6).rounded(3).bg(t.accent))))
+      .child(radioMark({ t, isOn }))
       .child(label);
   }
 }

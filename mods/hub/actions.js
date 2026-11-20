@@ -1,7 +1,8 @@
 // Starting a gh44 skill in a new Claude tab: here, in the background, or in the ticket's worktree.
+// Also Ask, and the gh44 installs and uninstall.
 import { run, spaces, agents, appHome, home, notify, openOverlay, exec } from "herdr";
 import { moveIssueToInProgress } from "./linear.js";
-import { getIssueStage, shortSkill } from "./settings.js";
+import { getIssueStage, shortSkill, getAskPrompt, ASK_ACTION } from "./settings.js";
 
 // Starting work on a ticket that is not started yet moves it to In Progress.
 const NOT_STARTED_STAGES = ["backlog", "todo"];
@@ -39,12 +40,18 @@ export const INSTALL_ERRORS = {
   install: "The install failed.",
 };
 
-// The gh44 folder that holds gh44-herdr, from the hub mod's link. null: the mod is not linked.
-async function getGh44Folder() {
+// The gh44-herdr checkout, from the hub mod's link. null: the mod is not linked.
+async function getGh44HerdrFolder() {
   const link = await exec("readlink", [`${appHome()}/mods/hub`]);
   const target = link.stdout.trim();
   if (link.code !== 0 || !target) return null;
-  return target.replace(/\/mods\/hub\/?$/, "").replace(/\/[^/]+$/, "");
+  return target.replace(/\/mods\/hub\/?$/, "");
+}
+
+// The gh44 folder that holds gh44-herdr. null: the mod is not linked.
+async function getGh44Folder() {
+  const folder = await getGh44HerdrFolder();
+  return folder ? folder.replace(/\/[^/]+$/, "") : null;
 }
 
 /** @param {string} output */
@@ -89,6 +96,21 @@ export async function installGh44Brain() {
   }
 }
 
+/** @typedef {{ status: "started" } | { status: "failed", reason: "notLinked" | "start", message?: string }} UninstallOutcome */
+
+// gh44-herdr's uninstall.sh, detached: it removes this panel's mod, so it must outlive it.
+/** @returns {Promise<UninstallOutcome>} */
+export async function uninstallGh44Herdr() {
+  try {
+    const folder = await getGh44HerdrFolder();
+    if (!folder) return { status: "failed", reason: "notLinked" };
+    const start = await exec("sh", ["-c", 'nohup bash "$0" >/dev/null 2>&1 &', `${folder}/uninstall.sh`]);
+    return start.code === 0 ? { status: "started" } : { status: "failed", reason: "start", message: lastLines(start.stderr) };
+  } catch (error) {
+    return { status: "failed", reason: "start", message: String(error) };
+  }
+}
+
 // The skills in ~/.claude/skills: its folders and symlinks, not plain files.
 // [] when the folder doesn't exist; null when it couldn't be listed (unknown, keep the defaults).
 /** @returns {Promise<string[] | null>} */
@@ -128,8 +150,12 @@ export function focusAgent(agent) {
 //   space? (a space already open on the branch), issue? (the Linear issue, for its status) }
 // role (settings.js getSkillRole): a review skill gets prRef, a work skill moves a not started ticket.
 // isBackground: open the tab without switching to it (reviews). isWorktree: in the ticket's worktree.
-// Resolves once a new worktree's branch is ready and its dialog is open.
+// Ask runs as startAsk. Resolves once a new worktree's branch is ready and its dialog is open.
 export async function startSkill({ skill, target, role = "other", isWorktree = false, isBackground = false }) {
+  if (skill === ASK_ACTION) {
+    startAsk(target);
+    return;
+  }
   const ref = role === "review" && target.prRef ? target.prRef : target.ref;
   const prompt = `/${skill} ${ref}`;
   const name = `${target.label} ${shortSkill(skill)}`;
@@ -146,6 +172,27 @@ export async function startSkill({ skill, target, role = "other", isWorktree = f
   }
   run("tab.new", { name, space: space?.id, argv: ["claude", prompt], focus: !isBackground, ...(target.folder ? { folder: target.folder } : {}) });
   if (isBackground) notify({ title: `Started ${name}`, body: "Running in the background. Herdr tells you when it needs you or is done.", level: "info" });
+}
+
+// Ask: Claude reads the PR (its URL) or ticket (its ID) in a new tab here, in front, and waits.
+// It never moves the ticket or asks where to run.
+/** @param {{ label: string }} target */
+export const getAskTabName = (target) => `${target.label} ${ASK_ACTION}`;
+
+// Shows the shown space's tab with this name, if there is one.
+/** @param {string} name */
+export function selectTabNamed(name) {
+  const tab = spaces().find((s) => s.active)?.tabs.find((t) => t.name === name);
+  if (tab) run("tab.select", { id: tab.id });
+}
+
+/** @param {{ ref: string, label: string, folder?: string | null }} target */
+function startAsk(target) {
+  const space = spaces().find((s) => s.active);
+  run("tab.new", {
+    name: getAskTabName(target), space: space?.id, argv: ["claude", getAskPrompt(target.ref)], focus: true,
+    ...(target.folder ? { folder: target.folder } : {}),
+  });
 }
 
 // Herdr's own New worktree dialog creates the worktree where Herdr keeps them

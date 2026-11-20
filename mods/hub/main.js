@@ -16,12 +16,12 @@ import {
 } from "./github.js";
 import { loadIssues, loadLinearMeta } from "./linear.js";
 import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
-import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill } from "./actions.js";
+import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
 import {
-  getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTabSkills, getTicketSkills,
-  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills,
+  getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getCaseActions, getTicketSkills,
+  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills, ASK_ACTION, ASK_DESCRIPTION,
 } from "./settings.js";
 
 const NO_MENU_ROW = -1;
@@ -62,6 +62,8 @@ const WHERE_OPTIONS = [
   { id: "here", label: "This space", icon: "play", isWorktree: false },
 ];
 const MENU_WIDTH = 240;
+// Closing a menu hands focus back after its start ran; a foreground tab is selected again after this.
+const REFOCUS_AFTER_MENU_MS = 200;
 // The Filters popover is frameless and this big; its visible box grows with the open section.
 const FILTER_POPOVER_WIDTH = 260;
 const FILTER_POPOVER_HEIGHT = 580;
@@ -270,14 +272,25 @@ function openMenu(menu) {
 }
 
 // Where a ticket's run goes: its worktree when it has one, else what "Where runs go" says
-// (ask, a new worktree, this space). A review skill works on an existing PR or branch: here.
+// (ask, a new worktree, this space). A review skill works on an existing PR or branch, and Ask
+// only reads: both here.
 /**
  * @param {{ skill: string, target: { main?: string | null, branch?: string | null, worktree?: string } }} params
  * @returns {"ask" | "worktree" | "here"}
  */
 const getRunPlace = ({ skill, target }) => {
-  if (target.worktree) return "worktree";
-  return getWhereToRun({ where: getPanelSettings().whereToRun, role: getRole(skill), hasWorktreeTarget: Boolean(target.main && target.branch) });
+  const role = getRole(skill);
+  if (target.worktree && role !== "ask") return "worktree";
+  return getWhereToRun({ where: getPanelSettings().whereToRun, role, hasWorktreeTarget: Boolean(target.main && target.branch) });
+};
+
+// What a row's main button does with its skill, on hover.
+/** @param {{ skill: string, target: { worktree?: string }, isWorktree: boolean, isBackground: boolean, canAsk: boolean }} params */
+const getSkillTip = ({ skill, target, isWorktree, isBackground, canAsk }) => {
+  if (skill === ASK_ACTION) return ASK_DESCRIPTION;
+  if (isWorktree) return target.worktree ? `/${skill} in this ticket's worktree (${target.worktree.split("/").pop()})` : `/${skill} in a new worktree`;
+  if (canAsk) return `/${skill}: asks first, new worktree or this space`;
+  return isBackground ? `/${skill} in a background tab` : `/${skill} in a new tab here`;
 };
 
 function startTicketSkill({ skill, menu }) {
@@ -375,6 +388,7 @@ export default class Hub extends View {
             cx.notify();
             try {
               await startSkill(start);
+              if (start.skill === ASK_ACTION) cx.timer.after(REFOCUS_AFTER_MENU_MS, () => selectTabNamed(getAskTabName(start.target)));
             } finally {
               preparing.delete(start.target.label);
               cx.notify();
@@ -627,8 +641,9 @@ export default class Hub extends View {
       case "1": if (getPanelSettings().shouldShowGithub) setShared(STORE.tab, "github"); break;
       case "2": if (getPanelSettings().shouldShowLinear) setShared(STORE.tab, "linear"); break;
       default: {
-        const skill = getKeySkills({ skills: getRowSkills(), tab })[e.key];
-        if (!skill || !row) return;
+        // A key for a skill the row's menu leaves out (hidden in its case, or address-review on someone else's PR) does nothing.
+        const skill = row ? getKeySkills({ skills: getRowSkills(), tab, actions: row.actions })[e.key] : undefined;
+        if (!skill) return;
         row.start(skill);
       }
     }
@@ -922,12 +937,11 @@ export default class Hub extends View {
     const space = findSpaceOnBranch(branch);
     if (space) return { label: "resume", icon: "resume", tip: `Go to ${space.name}`, run: () => run("space.select", { id: space.id }) };
     if (!skill) return { label: "open", icon: link.icon, tip: `${link.label} (no skill picked for this row in ⚙ settings)`, run: (/** @type {import("gpui-kit").Context} */ cx) => cx.open_url(link.url) };
-    const worktreeTip = target.worktree ? `/${skill} in this ticket's worktree (${target.worktree.split("/").pop()})` : `/${skill} in a new worktree`;
     return {
       label: shortSkill(skill), icon: isWorktree ? "branch" : "play",
       // Shown on the button, so it is clear before clicking that a worktree is involved.
       worktreeBadge: isWorktree ? "worktree" : null,
-      tip: isWorktree ? worktreeTip : canAsk ? `/${skill}: asks first, new worktree or this space` : isBackground ? `/${skill} in a background tab` : `/${skill} in a new tab here`,
+      tip: getSkillTip({ skill, target, isWorktree, isBackground, canAsk }),
       run: start ?? (() => void startSkill({ skill, target, role: getRole(skill), isWorktree, isBackground })),
     };
   }
@@ -1100,7 +1114,9 @@ export default class Hub extends View {
   pullRequestEntry({ pr, group }) {
     const colors = palette(theme());
     const skills = getRowSkills();
-    const skill = getDefaultSkill({ skills, tab: "github", situation: getGithubSituation({ pr, login: session.login }) });
+    const situation = getGithubSituation({ pr, login: session.login });
+    const skill = getDefaultSkill({ skills, tab: "github", situation });
+    const actions = getCaseActions({ skills, tab: "github", situation });
     const target = { ref: pr.url, label: `#${pr.number}`, folder: this.folder };
     const ci = CI_STATUS[pr.ci];
     const agent = findAgentFor({ label: target.label, branch: pr.branch });
@@ -1112,9 +1128,9 @@ export default class Hub extends View {
       id: pr.id, title: pr.title, isTitleDim: pr.isDraft, primary, rail: group.tone,
       status: { icon: `ci-${pr.ci}`, color: colors[ci.tone], tip: ci.tip },
       chips: this.pullRequestChips({ pr, group }),
-      menu: { skills: getTabSkills({ skills, tab: "github" }), target, isBackground: true, links: [toGithubLink(pr.url)] },
+      menu: { skills: actions, target, isBackground: true, links: [toGithubLink(pr.url)] },
     });
-    return { id: pr.id, url: pr.url, element, primary: primary.run, start: (s) => void startSkill({ skill: s, target, role: getRole(s), isBackground: true }) };
+    return { id: pr.id, url: pr.url, element, primary: primary.run, actions, start: (s) => void startSkill({ skill: s, target, role: getRole(s), isBackground: true }) };
   }
 
   // PR · author and age · review status · conflicts · checks · size · labels
@@ -1260,8 +1276,7 @@ export default class Hub extends View {
         ],
       menu,
     });
-    // A key for a skill this ticket's menu leaves out (address-review on someone else's PR) does nothing.
-    return { id: issue.id, url: issue.url, element, primary: primary.run, start: (s) => { if (skills.includes(s)) startTicketSkill({ skill: s, menu }); } };
+    return { id: issue.id, url: issue.url, element, primary: primary.run, actions: skills, start: (s) => startTicketSkill({ skill: s, menu }) };
   }
 
   linearView() {
