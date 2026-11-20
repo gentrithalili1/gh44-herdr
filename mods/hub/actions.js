@@ -32,6 +32,12 @@ const BRAIN_INSTALL_TIMEOUT_MS = 600_000;
 const ERROR_TAIL_LINES = 3;
 
 /** @typedef {{ status: "success" } | { status: "failed", reason: "notLinked" | "clone" | "install", message?: string }} InstallOutcome */
+/** @type {Record<"notLinked" | "clone" | "install", string>} */
+export const INSTALL_ERRORS = {
+  notLinked: "The hub mod is not linked from gh44-herdr. Run gh44-herdr/install.sh.",
+  clone: "git clone failed. Check your network and GitHub access.",
+  install: "The install failed.",
+};
 
 // The gh44 folder that holds gh44-herdr, from the hub mod's link. null: the mod is not linked.
 async function getGh44Folder() {
