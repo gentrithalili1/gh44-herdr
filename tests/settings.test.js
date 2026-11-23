@@ -1,10 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTicketSkills, getTabSkills, getKeySkills, getKeyHints,
-  addSkill, removeSkill, setSkillKey, setDefaultSkill, setCaseHidden, getCaseActions, hasNoDefaults, isValidSkillName,
+  getSettings, getDefaultSkill, OPEN_ENTRY, getGithubSituation, getLinearSituation, getSkillRole, getTicketSkills, getTabSkills, getKeySkills, getKeyHints,
+  addSkill, removeSkill, moveCaseEntry, setSkillKey, setCaseHidden, getCaseActions, hasNoDefaults, isValidSkillName,
   getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills, getRunnableSkills, getAskPrompt, canRun, canRunEntry, ASK_ACTION,
 } from "../mods/hub/settings.js";
+
+// What dragging a skill (null: Open) to the top of a case and checking it does: it becomes the default.
+const setDefaultSkill = ({ skills, tab, situation, skill }) => {
+  const entry = skill ?? OPEN_ENTRY;
+  const shown = entry === OPEN_ENTRY ? skills : setCaseHidden({ skills, tab, situation, skill: entry, isHidden: false });
+  return moveCaseEntry({ skills: shown, tab, situation, entry, to: 0 });
+};
 
 const { skills } = getSettings({ saved: undefined });
 const pr = ({ author, hasConflicts = false, ci = "passing", decision = null, isDraft = false }) => ({ author, hasConflicts, ci, decision, isDraft });
@@ -75,14 +82,14 @@ test("an action hidden in one case leaves that case's menu and keys, and stays i
   assert.deepEqual(draftActions, ["gh44-address-review", "gh44-resolve-conflicts", ASK_ACTION]);
   assert.equal(getKeySkills({ skills: next, tab: "github", actions: draftActions }).r, undefined);
   assert.equal(getKeySkills({ skills: next, tab: "github", actions: draftActions }).a, "gh44-address-review");
-  assert.deepEqual(getCaseActions({ skills: next, tab: "github", situation: "myPullRequest" }), ["gh44-code-review", "gh44-address-review", "gh44-resolve-conflicts", ASK_ACTION]);
+  assert.deepEqual(getCaseActions({ skills: next, tab: "github", situation: "myPullRequest" }), ["gh44-address-review", "gh44-code-review", "gh44-resolve-conflicts", ASK_ACTION]);
   const shown = setCaseHidden({ skills: next, tab: "github", situation: "myDraft", skill: "gh44-code-review", isHidden: false });
-  assert.deepEqual(getCaseActions({ skills: shown, tab: "github", situation: "myDraft" }), ["gh44-code-review", "gh44-address-review", "gh44-resolve-conflicts", ASK_ACTION]);
+  assert.deepEqual(getCaseActions({ skills: shown, tab: "github", situation: "myDraft" }), ["gh44-address-review", "gh44-code-review", "gh44-resolve-conflicts", ASK_ACTION]);
 });
 
-test("hiding a case's default clears it, so the row's button opens it", () => {
+test("hiding a case's default makes its next shown skill the default, and picking it again shows it", () => {
   const next = setCaseHidden({ skills, tab: "linear", situation: "todo", skill: "gh44-plan", isHidden: true });
-  assert.equal(getDefaultSkill({ skills: next, tab: "linear", situation: "todo" }), null);
+  assert.equal(getDefaultSkill({ skills: next, tab: "linear", situation: "todo" }), "gh44-clarify");
   assert.equal(getDefaultSkill({ skills: next, tab: "linear", situation: "backlog" }), "gh44-plan");
   const picked = setDefaultSkill({ skills: next, tab: "linear", situation: "todo", skill: "gh44-plan" });
   assert.equal(getCaseActions({ skills: picked, tab: "linear", situation: "todo" }).includes("gh44-plan"), true);
@@ -92,7 +99,7 @@ test("a ticket's menu skips what its case hides, and the hidden list survives a 
   const next = setCaseHidden({ skills, tab: "linear", situation: "inProgress", skill: "gh44-clarify", isHidden: true });
   const { skills: saved } = getSettings({ saved: JSON.parse(JSON.stringify({ skills: next })) });
   const inProgress = { stateType: "started", state: "In Progress", isMyPullRequest: false, prUrl: null };
-  assert.deepEqual(getTicketSkills({ skills: saved, issue: inProgress }), ["gh44-plan", "gh44-implement", ASK_ACTION]);
+  assert.deepEqual(getTicketSkills({ skills: saved, issue: inProgress }), ["gh44-implement", "gh44-plan", ASK_ACTION]);
   assert.equal(getTicketSkills({ skills: saved, issue: { ...inProgress, stateType: "unstarted" } }).includes("gh44-clarify"), true);
 });
 
@@ -169,9 +176,9 @@ test("review defaults get the PR URL and never ask where; work defaults move the
 test("a ticket's menu offers address-review on my PR only, and code-review on someone else's PR", () => {
   const started = { stateType: "started", state: "In Review" };
   assert.deepEqual(getTicketSkills({ skills, issue: { ...started, isMyPullRequest: true, prUrl: "https://github.com/o/r/pull/1" } }),
-    ["gh44-clarify", "gh44-plan", "gh44-implement", "gh44-address-review", ASK_ACTION]);
+    ["gh44-address-review", "gh44-clarify", "gh44-plan", "gh44-implement", ASK_ACTION]);
   assert.deepEqual(getTicketSkills({ skills, issue: { ...started, isMyPullRequest: false, prUrl: "https://github.com/o/r/pull/1" } }),
-    ["gh44-clarify", "gh44-plan", "gh44-implement", "gh44-code-review", ASK_ACTION]);
+    ["gh44-code-review", "gh44-clarify", "gh44-plan", "gh44-implement", ASK_ACTION]);
   assert.deepEqual(getTicketSkills({ skills, issue: { ...started, isMyPullRequest: false, prUrl: null } }),
     ["gh44-clarify", "gh44-plan", "gh44-implement", ASK_ACTION]);
 });
@@ -387,4 +394,26 @@ test("a repo skill needs its repo's .claude to still have it; an unlisted repo k
 test("repo skills don't count toward the installed gh44 skills", () => {
   const added = addSkill({ skills: getGh44Setup(), tab: "github", skill: "deploy-preview", repo: "acme/web" });
   assert.deepEqual(countInstalledSkills({ skills: added, installedSkills: [] }), { installed: 0, total: 6 });
+});
+
+test("a case's order is its menu's, and its first shown entry is the default; Open first opens it", () => {
+  const actions = (next) => getCaseActions({ skills: next, tab: "github", situation: "othersPullRequest" });
+  const def = (next) => getDefaultSkill({ skills: next, tab: "github", situation: "othersPullRequest" });
+  assert.equal(def(skills), "gh44-code-review");
+  const moved = moveCaseEntry({ skills, tab: "github", situation: "othersPullRequest", entry: ASK_ACTION, to: 0 });
+  assert.equal(def(moved), ASK_ACTION);
+  assert.deepEqual(actions(moved), [ASK_ACTION, "gh44-code-review", "gh44-address-review", "gh44-resolve-conflicts"]);
+  assert.equal(getDefaultSkill({ skills: moved, tab: "github", situation: "myDraft" }), "gh44-address-review");
+  const opens = moveCaseEntry({ skills, tab: "github", situation: "othersPullRequest", entry: OPEN_ENTRY, to: 0 });
+  assert.equal(def(opens), null);
+  assert.equal(actions(opens).includes(OPEN_ENTRY), false);
+  assert.equal(moveCaseEntry({ skills, tab: "github", situation: "othersPullRequest", entry: "gh44-code-review", to: 1 }), skills);
+});
+
+test("hiding a case's default makes its next shown entry the default, and the order survives a save", () => {
+  const hidden = setCaseHidden({ skills, tab: "github", situation: "othersPullRequest", skill: "gh44-code-review", isHidden: true });
+  assert.equal(getDefaultSkill({ skills: hidden, tab: "github", situation: "othersPullRequest" }), "gh44-address-review");
+  const moved = moveCaseEntry({ skills: hidden, tab: "github", situation: "othersPullRequest", entry: ASK_ACTION, to: 0 });
+  const { skills: saved } = getSettings({ saved: { skills: moved } });
+  assert.deepEqual(saved.github.cases.othersPullRequest, moved.github.cases.othersPullRequest);
 });
