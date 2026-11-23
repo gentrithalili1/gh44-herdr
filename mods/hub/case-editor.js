@@ -4,7 +4,7 @@ import { div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { theme } from "herdr";
 import { icon, radioMark } from "./ui.js";
-import { getDefaultSkill, setDefaultSkill, setCaseHidden, getCaseActions, shortSkill } from "./settings.js";
+import { getDefaultSkill, setDefaultSkill, setCaseHidden, getCaseActions, shortSkill, shortRepo } from "./settings.js";
 
 /** @typedef {import("./settings.js").Skills} Skills */
 /** @typedef {import("./settings.js").Situation} Situation */
@@ -59,7 +59,7 @@ export class CaseEditor {
     const actionRows = skills[tab].list.map((entry) => {
       const isShown = shown.includes(entry.name);
       return h_flex().h(26).pl(18).pr(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
-        .child(this.defaultChoice({ id: `${caseId}-${entry.name}`, label: entry.name, isOn: entry.name === current, onClick: handlePickDefault(entry.name) }))
+        .child(this.defaultChoice({ id: `${caseId}-${entry.name}`, label: entry.repo ? `${entry.name} · ${shortRepo(entry.repo)}` : entry.name, isOn: entry.name === current, onClick: handlePickDefault(entry.name) }))
         .child(div().id(`case-shown-${caseId}-${entry.name}`).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
           .hover((s) => s.bg(t.hover)).tooltip(isShown ? "Shown in this case's menu: click to hide" : "Hidden in this case: click to show")
           .on_click(handleToggleShown({ skill: entry.name, isShown }))

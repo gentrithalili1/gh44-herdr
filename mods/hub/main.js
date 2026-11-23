@@ -16,7 +16,7 @@ import {
 } from "./github.js";
 import { loadIssues, loadLinearMeta } from "./linear.js";
 import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
-import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName } from "./actions.js";
+import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
 import {
@@ -150,7 +150,26 @@ const session = {
   // Folder names in ~/.claude/skills; null until listed.
   /** @type {string[] | null} */
   installedSkills: null,
+  // The focused repo (id: its shared git dir) with its name and own skills, for repo actions.
+  /** @type {{ id: string | null, folder: string | null } & import("./settings.js").RepoSkills} */
+  repo: { id: null, folder: null, name: null, skills: null },
 };
+
+// The focused repo's name ("owner/name", else its folder's name) and its .claude skills.
+// Kept only while the panel still shows that repo.
+/** @param {{ cx: import("gpui-kit").Context, repoId: string | null, folder: string | null }} params */
+function loadFocusedRepo({ cx, repoId, folder }) {
+  session.repo = session.repo.id === repoId ? { ...session.repo, folder } : { id: repoId, folder, name: null, skills: null };
+  if (!repoId) return;
+  const machine = activeMachine();
+  cx.spawn(async (cx) => {
+    const [name, skills] = await Promise.all([loadRepoName({ folder, machine }), loadRepoSkills({ folder, machine })]);
+    if (session.repo.id !== repoId) return;
+    const fallbackName = repoId.replace(/\/\.git\/?$/, "").split("/").pop() ?? null;
+    session.repo = { ...session.repo, name: name ?? fallbackName, skills: skills ?? session.repo.skills };
+    cx.notify();
+  });
+}
 /** @type {Record<string, "general" | "github" | "linear">} */
 const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear" };
 /** @param {string} url */
@@ -201,7 +220,7 @@ let frame = null;
 const readPanelSettings = () => getSettings({ saved: shared(STORE.settings), installedSkills: session.installedSkills });
 const getPanelSettings = () => frame?.settings ?? readPanelSettings();
 // The skills rows run: the settings' ones without those not installed.
-const getRowSkills = () => getRunnableSkills({ skills: getPanelSettings().skills, installedSkills: session.installedSkills });
+const getRowSkills = () => getRunnableSkills({ skills: getPanelSettings().skills, installedSkills: session.installedSkills, repo: session.repo });
 /** @param {string} skill */
 const getRole = (skill) => getSkillRole({ skills: getPanelSettings().skills, skill });
 const currentTab = () => frame?.tab ?? getShownTab({ saved: shared(STORE.tab), settings: getPanelSettings() });
@@ -358,6 +377,7 @@ export default class Hub extends View {
     this.settingsView = new SettingsView({
       session, getSettings: getPanelSettings, patchSettings, saveSkills,
       onLinearKeyChange: (cx) => this.reloadLinear(cx),
+      reloadRepoSkills: (cx) => loadFocusedRepo({ cx, repoId: session.repo.id, folder: session.repo.folder }),
       focusPanel: () => this.handle.focus(),
     });
     if (checking()) return;
@@ -434,6 +454,7 @@ export default class Hub extends View {
     const isShown = isPanelShown();
     if (repoId !== this.repoId) this.shouldRevalidate = true;
     this.repoId = repoId;
+    if (repoId !== session.repo.id) loadFocusedRepo({ cx, repoId, folder });
 
     const ln = getFilters(STORE.linear);
     const linearKey = `ln|${JSON.stringify(buildIssueFilter(ln))}`;

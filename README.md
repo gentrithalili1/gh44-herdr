@@ -10,6 +10,8 @@ The layout's **Work panel** (the `hub` mod) lists your tickets and PRs. Each row
 
 Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
 
+A repo can bring its own skills. With a terminal in the repo focused, **+ Add skill** also lists the repo's `.claude/skills` and `.claude/commands/*.md`, tagged with the repo's name. Rows offer a repo skill, its key and its case default only while that repo is focused.
+
 ## Community mods
 
 | Mod                                                                                  | What it does                                                                                                     |

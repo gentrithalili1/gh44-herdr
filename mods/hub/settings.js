@@ -7,7 +7,10 @@
 /** @typedef {"backlog" | "todo" | "inProgress" | "inProgressWithPullRequest" | "reviewMine" | "reviewOthers"} LinearSituation */
 /** @typedef {GithubSituation | LinearSituation} Situation */
 /** @typedef {{ author: string, hasConflicts: boolean, ci: "passing" | "failing" | "pending" | "none", decision: string | null, isDraft: boolean }} PullRequestShape */
-/** @typedef {{ name: string, key: string | null }} Skill */
+// repo: a repo's own skill ("owner/name"), offered only while that repo is focused.
+/** @typedef {{ name: string, key: string | null, repo?: string }} Skill */
+// The focused repo: its name and the skills in its .claude folder. skills null: not listed yet.
+/** @typedef {{ name: string | null, skills: string[] | null }} RepoSkills */
 // A case's default runs on the row's main button; none: the button opens the PR or ticket.
 /** @typedef {{ default?: string, hidden: string[] }} CaseSettings */
 /** @typedef {{ list: Skill[], cases: Partial<Record<Situation, CaseSettings>> }} TabSkills */
@@ -163,7 +166,10 @@ function readTabSkills({ saved, tab }) {
   const s = toRecord(saved);
   if (!Array.isArray(s.list)) return null;
   const list = withAsk(s.list.map(toRecord).filter((e) => typeof e.name === "string" && isValidSkillName(e.name))
-    .map((e) => ({ name: String(e.name), key: typeof e.key === "string" && KEY_LETTER.test(e.key) ? e.key : null })));
+    .map((e) => ({
+      name: String(e.name), key: typeof e.key === "string" && KEY_LETTER.test(e.key) ? e.key : null,
+      ...(typeof e.repo === "string" && e.repo ? { repo: e.repo } : {}),
+    })));
   const names = list.map((e) => e.name);
   return keepCaseSkills({ tabSkills: { list, cases: readSavedCases({ saved: s, tab }) }, isKept: (name) => names.includes(name) });
 }
@@ -219,12 +225,13 @@ export const hasNoDefaults = ({ skills, tab }) => Object.values(skills[tab].case
 /** @param {{ skills: Skills, tab: Tab, tabSkills: TabSkills }} params @returns {Skills} */
 const withTab = ({ skills, tab, tabSkills }) => ({ ...skills, [tab]: tabSkills });
 
-/** @param {{ skills: Skills, tab: Tab, skill: string }} params @returns {Skills} */
-export function addSkill({ skills, tab, skill }) {
+// repo: the skill is that repo's own, so rows offer it only while the repo is focused.
+/** @param {{ skills: Skills, tab: Tab, skill: string, repo?: string | null }} params @returns {Skills} */
+export function addSkill({ skills, tab, skill, repo = null }) {
   const name = skill.trim();
   const current = skills[tab];
   if (!isValidSkillName(name) || current.list.some((e) => e.name === name)) return skills;
-  return withTab({ skills, tab, tabSkills: { ...current, list: [...current.list, { name, key: null }] } });
+  return withTab({ skills, tab, tabSkills: { ...current, list: [...current.list, { name, key: null, ...(repo ? { repo } : {}) }] } });
 }
 
 // Also clears it from every case, so no row runs a skill the menu no longer has. Ask stays.
@@ -399,10 +406,10 @@ export function isUsingGh44Setup({ skills }) {
     && isSameTab({ a: skills.linear, b: DEFAULT_SKILLS.linear, tab: "linear" });
 }
 
-// How many of the skills (each counted once, across both tabs, Ask aside) are installed.
+// How many of the skills (each counted once, across both tabs, Ask and repo skills aside) are installed.
 /** @param {{ skills: Skills, installedSkills: string[] }} params */
 export function countInstalledSkills({ skills, installedSkills }) {
-  const names = new Set([...skills.github.list, ...skills.linear.list].map((e) => e.name).filter((name) => name !== ASK_ACTION));
+  const names = new Set([...skills.github.list, ...skills.linear.list].filter((e) => !e.repo).map((e) => e.name).filter((name) => name !== ASK_ACTION));
   return { installed: [...names].filter((name) => installedSkills.includes(name)).length, total: names.size };
 }
 
@@ -412,16 +419,29 @@ export function countInstalledSkills({ skills, installedSkills }) {
 export const canRun = ({ skill, installedSkills }) =>
   !installedSkills || skill === ASK_ACTION || skill.includes(":") || installedSkills.includes(skill);
 
+// A repo skill runs only in its repo, while the repo's .claude has it. Any other entry: canRun.
+/** @param {{ entry: Skill, installedSkills: string[] | null, repo: RepoSkills | null }} params */
+export function canRunEntry({ entry, installedSkills, repo }) {
+  if (!entry.repo) return canRun({ skill: entry.name, installedSkills });
+  return entry.repo === repo?.name && (!repo.skills || repo.skills.includes(entry.name));
+}
+
+// "owner/name" -> "name", for the repo tag beside a repo skill.
+/** @param {string} repo */
+export const shortRepo = (repo) => repo.split("/").pop() ?? repo;
+
 /** @param {string} ref The ticket ID or the PR URL. */
 export const getAskPrompt = (ref) => `Read ${ref} and wait for my questions. Don't change any code.`;
 
-// The skills rows offer and run: the saved ones without the uninstalled. A row whose skill is
-// missing shows "open" instead of starting an unknown command.
-/** @param {{ skills: Skills, installedSkills: string[] | null }} params @returns {Skills} */
-export function getRunnableSkills({ skills, installedSkills }) {
-  /** @param {string} skill */
-  const isRunnable = (skill) => canRun({ skill, installedSkills });
+// The skills rows offer and run: the saved ones without the uninstalled, and repo skills only in
+// their repo. A row whose skill is missing shows "open" instead of starting an unknown command.
+/** @param {{ skills: Skills, installedSkills: string[] | null, repo?: RepoSkills | null }} params @returns {Skills} */
+export function getRunnableSkills({ skills, installedSkills, repo = null }) {
   /** @param {TabSkills} tabSkills @returns {TabSkills} */
-  const runnable = (tabSkills) => keepCaseSkills({ tabSkills: { ...tabSkills, list: tabSkills.list.filter((e) => isRunnable(e.name)) }, isKept: isRunnable });
+  const runnable = (tabSkills) => {
+    const list = tabSkills.list.filter((entry) => canRunEntry({ entry, installedSkills, repo }));
+    const names = list.map((e) => e.name);
+    return keepCaseSkills({ tabSkills: { ...tabSkills, list }, isKept: (name) => names.includes(name) });
+  };
   return { github: runnable(skills.github), linear: runnable(skills.linear) };
 }
