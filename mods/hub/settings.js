@@ -11,8 +11,9 @@
 /** @typedef {{ name: string, key: string | null, repo?: string }} Skill */
 // The focused repo: its name and the skills in its .claude folder. skills null: not listed yet.
 /** @typedef {{ name: string | null, skills: string[] | null }} RepoSkills */
-// A case's default runs on the row's main button; none: the button opens the PR or ticket.
-/** @typedef {{ default?: string, hidden: string[] }} CaseSettings */
+// A case's actions in its order, OPEN_ENTRY among them, and the ones its menu hides. The first
+// one not hidden is the default the row's main button runs; OPEN_ENTRY there: it opens the PR or ticket.
+/** @typedef {{ order: string[], hidden: string[] }} CaseSettings */
 /** @typedef {{ list: Skill[], cases: Partial<Record<Situation, CaseSettings>> }} TabSkills */
 /** @typedef {Record<Tab, TabSkills>} Skills */
 /** @typedef {"ask" | "worktree" | "here"} WhereToRun */
@@ -24,6 +25,8 @@ export const ASK_ACTION = "ask";
 const ASK_KEY = "q";
 export const ASK_DESCRIPTION = "Ask: Claude reads it in a new tab here and waits for your questions. It changes no code.";
 const ASK_ENTRY = { name: ASK_ACTION, key: ASK_KEY };
+// In a case's order: the main button opens the PR or ticket. Not a valid skill name, so no skill clashes.
+export const OPEN_ENTRY = "(open)";
 
 /** @type {Record<Tab, { list: Skill[], defaults: Partial<Record<Situation, string>> }>} */
 const BUILT_IN_SKILLS = {
@@ -86,22 +89,63 @@ export const LINEAR_SITUATIONS = [
 ];
 const SITUATIONS = { github: GITHUB_SITUATIONS, linear: LINEAR_SITUATIONS };
 
-// No default key at all without a skill, so a saved case reads the same as a fresh one. The
-// default is never hidden: it wins, like setDefaultSkill.
-/** @param {{ skill: unknown, hidden: string[] }} params @returns {CaseSettings} */
-const toCase = ({ skill, hidden }) => (typeof skill === "string" && skill
-  ? { default: skill, hidden: hidden.filter((name) => name !== skill) }
-  : { hidden });
+// A case from one default (a skill, or none): it goes first and shows; the rest follow in the
+// list's order, and with no default OPEN_ENTRY goes first. Also reads cases saved before order.
+/** @param {{ skill: unknown, hidden: string[], names: string[] }} params @returns {CaseSettings} */
+const toCase = ({ skill, hidden, names }) => {
+  const isSkill = typeof skill === "string" && skill !== "" && names.includes(skill);
+  const others = names.filter((name) => name !== skill);
+  return {
+    order: isSkill ? [String(skill), ...others, OPEN_ENTRY] : [OPEN_ENTRY, ...others],
+    hidden: hidden.filter((name) => name !== skill),
+  };
+};
+
+// A case fitted to the tab's list: entries not in it dropped, new skills added at the end,
+// OPEN_ENTRY always in the order and never hidden.
+/** @param {{ c: CaseSettings, names: string[] }} params @returns {CaseSettings} */
+const fitCase = ({ c, names }) => {
+  const isKnown = (/** @type {string} */ name) => name === OPEN_ENTRY || names.includes(name);
+  const kept = [...new Set(c.order.filter(isKnown))];
+  const missing = [...names, OPEN_ENTRY].filter((name) => !kept.includes(name));
+  return { order: [...kept, ...missing], hidden: [...new Set(c.hidden.filter((name) => names.includes(name)))] };
+};
+
+// Every case of a tab fitted to its list, a missing case built with no default.
+/** @param {{ tabSkills: { list: Skill[], cases: Partial<Record<string, CaseSettings>> }, tab: Tab }} params @returns {TabSkills} */
+const fitCases = ({ tabSkills, tab }) => {
+  const names = tabSkills.list.map((e) => e.name);
+  return {
+    list: tabSkills.list,
+    cases: Object.fromEntries(SITUATIONS[tab].map((sit) => [sit.id, fitCase({ c: tabSkills.cases[sit.id] ?? toCase({ skill: null, hidden: [], names }), names })])),
+  };
+};
+
+// A tab with only `list` left of its skills. A case whose default leaves opens the PR or ticket
+// instead of falling to its next skill, so a removed or missing skill never quietly changes it.
+/** @param {{ tabSkills: TabSkills, list: Skill[], tab: Tab }} params @returns {TabSkills} */
+const keepSkills = ({ tabSkills, list, tab }) => {
+  const names = list.map((e) => e.name);
+  const cases = Object.fromEntries(Object.entries(tabSkills.cases).map(([id, c]) => {
+    const first = c.order.find((name) => !c.hidden.includes(name));
+    const isFirstGone = first !== undefined && first !== OPEN_ENTRY && !names.includes(first);
+    return [id, isFirstGone ? { ...c, order: [OPEN_ENTRY, ...c.order.filter((name) => name !== OPEN_ENTRY)] } : c];
+  }));
+  return fitCases({ tabSkills: { list, cases }, tab });
+};
 
 // Every case of a tab, each with its default from defaults (when it has one) and nothing hidden.
-/** @param {{ tab: Tab, defaults: Partial<Record<string, unknown>> }} params @returns {TabSkills["cases"]} */
-const toCases = ({ tab, defaults }) => Object.fromEntries(SITUATIONS[tab].map((sit) => [sit.id, toCase({ skill: defaults[sit.id], hidden: [] })]));
+/** @param {{ tab: Tab, defaults: Partial<Record<string, unknown>>, names: string[] }} params @returns {TabSkills["cases"]} */
+const toCases = ({ tab, defaults, names }) => Object.fromEntries(SITUATIONS[tab].map((sit) => [sit.id, toCase({ skill: defaults[sit.id], hidden: [], names })]));
+
+/** @param {Tab} tab @returns {TabSkills} */
+const builtInTab = (tab) => {
+  const { list, defaults } = BUILT_IN_SKILLS[tab];
+  return { list, cases: toCases({ tab, defaults, names: list.map((e) => e.name) }) };
+};
 
 /** @type {Record<Tab, TabSkills>} */
-const DEFAULT_SKILLS = {
-  github: { list: BUILT_IN_SKILLS.github.list, cases: toCases({ tab: "github", defaults: BUILT_IN_SKILLS.github.defaults }) },
-  linear: { list: BUILT_IN_SKILLS.linear.list, cases: toCases({ tab: "linear", defaults: BUILT_IN_SKILLS.linear.defaults }) },
-};
+const DEFAULT_SKILLS = { github: builtInTab("github"), linear: builtInTab("linear") };
 /** @type {WhereToRun[]} */
 const WHERE_TO_RUN = ["ask", "worktree", "here"];
 // Taken by the panel itself: j/k move, o opens.
@@ -128,30 +172,21 @@ const SPLIT_SITUATIONS = {
 const splitLegacyDefaults = (defaults) => Object.fromEntries(Object.entries(defaults)
   .flatMap(([id, skill]) => (SPLIT_SITUATIONS[id] ?? [id]).map((situation) => [situation, skill])));
 
-// A saved tab's cases, or its cases from the defaults saved before cases.
-/** @param {{ saved: Record<string, any>, tab: Tab }} params @returns {TabSkills["cases"]} */
-function readSavedCases({ saved, tab }) {
-  if (!saved.cases) return toCases({ tab, defaults: splitLegacyDefaults(toRecord(saved.defaults)) });
+/** @param {unknown} value @returns {string[]} */
+const toNames = (value) => (Array.isArray(value) ? value.filter((name) => typeof name === "string") : []);
+
+// A saved tab's cases: with their order, or from the one default saved before order, or from
+// the defaults saved before cases.
+/** @param {{ saved: Record<string, any>, tab: Tab, names: string[] }} params @returns {TabSkills["cases"]} */
+function readSavedCases({ saved, tab, names }) {
+  if (!saved.cases) return toCases({ tab, defaults: splitLegacyDefaults(toRecord(saved.defaults)), names });
   const cases = toRecord(saved.cases);
   return Object.fromEntries(SITUATIONS[tab].map((sit) => {
     const c = toRecord(cases[sit.id]);
-    const hidden = Array.isArray(c.hidden) ? c.hidden.filter((name) => typeof name === "string") : [];
-    return [sit.id, toCase({ skill: c.default, hidden })];
+    const hidden = toNames(c.hidden);
+    return [sit.id, Array.isArray(c.order) ? { order: toNames(c.order), hidden } : toCase({ skill: c.default, hidden, names })];
   }));
 }
-
-/** @param {{ tabSkills: TabSkills, update: (c: CaseSettings) => CaseSettings }} params @returns {TabSkills} */
-const mapCases = ({ tabSkills, update }) => ({
-  ...tabSkills,
-  cases: Object.fromEntries(Object.entries(tabSkills.cases).map(([id, c]) => [id, update(c)])),
-});
-
-// Keeps the cases' defaults and hidden skills that pass isKept.
-/** @param {{ tabSkills: TabSkills, isKept: (skill: string) => boolean }} params @returns {TabSkills} */
-const keepCaseSkills = ({ tabSkills, isKept }) => mapCases({
-  tabSkills,
-  update: (c) => toCase({ skill: c.default && isKept(c.default) ? c.default : null, hidden: c.hidden.filter(isKept) }),
-});
 
 // A list saved before Ask gets it at the end, on its key unless another skill has it.
 /** @param {Skill[]} list @returns {Skill[]} */
@@ -170,8 +205,8 @@ function readTabSkills({ saved, tab }) {
       name: String(e.name), key: typeof e.key === "string" && KEY_LETTER.test(e.key) ? e.key : null,
       ...(typeof e.repo === "string" && e.repo ? { repo: e.repo } : {}),
     })));
-  const names = list.map((e) => e.name);
-  return keepCaseSkills({ tabSkills: { list, cases: readSavedCases({ saved: s, tab }) }, isKept: (name) => names.includes(name) });
+  const cases = readSavedCases({ saved: s, tab, names: list.map((e) => e.name) });
+  return keepSkills({ tabSkills: { list, cases }, list, tab });
 }
 
 // A tab's default skills, without the ones not installed. null: not listed yet, all of them.
@@ -181,7 +216,7 @@ function getDefaultTabSkills({ tab, installedSkills }) {
   if (!installedSkills) return tabSkills;
   /** @param {string} skill */
   const isInstalled = (skill) => canRun({ skill, installedSkills });
-  return keepCaseSkills({ tabSkills: { ...tabSkills, list: tabSkills.list.filter((e) => isInstalled(e.name)) }, isKept: isInstalled });
+  return keepSkills({ tabSkills, list: tabSkills.list.filter((e) => isInstalled(e.name)), tab });
 }
 
 // What shared("hub.settings") holds, over the defaults. A tab's skills, once saved, are kept as is.
@@ -220,7 +255,7 @@ export function getWhereToRun({ where, role, hasWorktreeTarget }) {
 
 // No kind of row runs a skill: every row's button just opens it.
 /** @param {{ skills: Skills, tab: Tab }} params */
-export const hasNoDefaults = ({ skills, tab }) => Object.values(skills[tab].cases).every((c) => !c.default);
+export const hasNoDefaults = ({ skills, tab }) => SITUATIONS[tab].every((sit) => getDefaultSkill({ skills, tab, situation: sit.id }) === null);
 
 /** @param {{ skills: Skills, tab: Tab, tabSkills: TabSkills }} params @returns {Skills} */
 const withTab = ({ skills, tab, tabSkills }) => ({ ...skills, [tab]: tabSkills });
@@ -231,7 +266,7 @@ export function addSkill({ skills, tab, skill, repo = null }) {
   const name = skill.trim();
   const current = skills[tab];
   if (!isValidSkillName(name) || current.list.some((e) => e.name === name)) return skills;
-  return withTab({ skills, tab, tabSkills: { ...current, list: [...current.list, { name, key: null, ...(repo ? { repo } : {}) }] } });
+  return withTab({ skills, tab, tabSkills: fitCases({ tabSkills: { ...current, list: [...current.list, { name, key: null, ...(repo ? { repo } : {}) }] }, tab }) });
 }
 
 // Also clears it from every case, so no row runs a skill the menu no longer has. Ask stays.
@@ -239,8 +274,31 @@ export function addSkill({ skills, tab, skill, repo = null }) {
 export function removeSkill({ skills, tab, skill }) {
   if (skill === ASK_ACTION) return skills;
   const current = skills[tab];
-  const tabSkills = keepCaseSkills({ tabSkills: { ...current, list: current.list.filter((e) => e.name !== skill) }, isKept: (name) => name !== skill });
-  return withTab({ skills, tab, tabSkills });
+  return withTab({ skills, tab, tabSkills: keepSkills({ tabSkills: current, list: current.list.filter((e) => e.name !== skill), tab }) });
+}
+
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, update: (c: CaseSettings) => CaseSettings }} params @returns {Skills} */
+const withCase = ({ skills, tab, situation, update }) => {
+  const current = skills[tab];
+  const c = current.cases[situation];
+  if (!c) return skills;
+  return withTab({ skills, tab, tabSkills: { ...current, cases: { ...current.cases, [situation]: update(c) } } });
+};
+
+// Puts an entry (a skill or OPEN_ENTRY) at position `to` of a case's order (an index from
+// before the move). An unknown entry or a drop on its own place changes nothing.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, entry: string, to: number }} params @returns {Skills} */
+export function moveCaseEntry({ skills, tab, situation, entry, to }) {
+  const from = skills[tab].cases[situation]?.order.indexOf(entry) ?? -1;
+  if (from === -1 || to === from || to === from + 1) return skills;
+  return withCase({
+    skills, tab, situation,
+    update: (c) => {
+      const rest = c.order.filter((name) => name !== entry);
+      const at = Math.max(0, Math.min(to > from ? to - 1 : to, rest.length));
+      return { ...c, order: [...rest.slice(0, at), entry, ...rest.slice(at)] };
+    },
+  });
 }
 
 // A letter another skill of the tab had moves to this one; a reserved letter changes nothing.
@@ -256,23 +314,18 @@ export function setSkillKey({ skills, tab, skill, key }) {
   return withTab({ skills, tab, tabSkills: { ...current, list } });
 }
 
-// skill null: the row gets no skill and its button opens the PR or ticket. A hidden skill picked
-// as the default shows again, so the menu always has what the button runs.
-/** @param {{ skills: Skills, tab: Tab, situation: Situation, skill: string | null }} params @returns {Skills} */
-export function setDefaultSkill({ skills, tab, situation, skill }) {
-  const current = skills[tab];
-  const hidden = (current.cases[situation]?.hidden ?? []).filter((name) => name !== skill);
-  return withTab({ skills, tab, tabSkills: { ...current, cases: { ...current.cases, [situation]: toCase({ skill, hidden }) } } });
-}
-
-// Hidden: the skill leaves the case's menu and keys. Hiding the case's default clears it.
+// Hidden: the skill leaves the case's menu and keys, and the next shown entry becomes the
+// default. OPEN_ENTRY is not in the menu, so it never hides.
 /** @param {{ skills: Skills, tab: Tab, situation: Situation, skill: string, isHidden: boolean }} params @returns {Skills} */
 export function setCaseHidden({ skills, tab, situation, skill, isHidden }) {
-  const current = skills[tab];
-  const c = current.cases[situation] ?? { hidden: [] };
-  const others = c.hidden.filter((name) => name !== skill);
-  const next = toCase({ skill: isHidden && c.default === skill ? null : c.default, hidden: isHidden ? [...others, skill] : others });
-  return withTab({ skills, tab, tabSkills: { ...current, cases: { ...current.cases, [situation]: next } } });
+  if (skill === OPEN_ENTRY) return skills;
+  return withCase({
+    skills, tab, situation,
+    update: (c) => {
+      const others = c.hidden.filter((name) => name !== skill);
+      return { ...c, hidden: isHidden ? [...others, skill] : others };
+    },
+  });
 }
 
 // Where a ticket is: backlog, todo, progress or review (a started state named like "In Review").
@@ -309,10 +362,13 @@ export function getLinearSituation(issue) {
   }
 }
 
-// The skill a row's main button runs, or null when none is picked.
-/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params */
+// The skill a row's main button runs: the case's first shown entry. null: OPEN_ENTRY is first
+// (or nothing shows), so the button opens the PR or ticket.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params @returns {string | null} */
 export function getDefaultSkill({ skills, tab, situation }) {
-  return skills[tab].cases[situation]?.default ?? null;
+  const c = skills[tab].cases[situation];
+  const first = c?.order.find((name) => !c.hidden.includes(name));
+  return first && first !== OPEN_ENTRY ? first : null;
 }
 
 /** @type {LinearSituation[]} */
@@ -342,11 +398,12 @@ export function getSkillRole({ skills, skill }) {
 /** @param {{ skills: Skills, tab: Tab }} params */
 export const getTabSkills = ({ skills, tab }) => skills[tab].list.map((s) => s.name);
 
-// What a row of this case offers in its menu and keys: the tab's skills it does not hide.
-/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params */
+// What a row of this case offers in its menu and keys, in the case's order: the skills it does not hide.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params @returns {string[]} */
 export function getCaseActions({ skills, tab, situation }) {
-  const hidden = skills[tab].cases[situation]?.hidden ?? [];
-  return getTabSkills({ skills, tab }).filter((name) => !hidden.includes(name));
+  const c = skills[tab].cases[situation];
+  if (!c) return getTabSkills({ skills, tab });
+  return c.order.filter((name) => name !== OPEN_ENTRY && !c.hidden.includes(name));
 }
 
 // A ticket's menu (and so its keys): its case's actions, with my-PR review skills only on my PR
@@ -381,7 +438,10 @@ export function getKeyHints({ skills, tab }) {
 }
 
 /** @param {TabSkills} tab @returns {TabSkills} */
-const copyTab = (tab) => ({ ...mapCases({ tabSkills: tab, update: (c) => ({ ...c, hidden: [...c.hidden] }) }), list: tab.list.map((e) => ({ ...e })) });
+const copyTab = (tab) => ({
+  list: tab.list.map((e) => ({ ...e })),
+  cases: Object.fromEntries(Object.entries(tab.cases).map(([id, c]) => [id, { order: [...c.order], hidden: [...c.hidden] }])),
+});
 
 // The suggested setup: the gh44 skills from gh44-brain on both tabs, with their keys and defaults.
 // A fresh copy, so an edit never reaches the built-in one.
@@ -392,7 +452,7 @@ export const getGh44Setup = () => ({ github: copyTab(DEFAULT_SKILLS.github), lin
 const isSameList = ({ a, b }) => a.length === b.length && a.every((name, i) => name === b[i]);
 
 /** @param {{ a?: CaseSettings, b?: CaseSettings }} params */
-const isSameCase = ({ a, b }) => (a?.default ?? null) === (b?.default ?? null) && isSameList({ a: a?.hidden ?? [], b: b?.hidden ?? [] });
+const isSameCase = ({ a, b }) => isSameList({ a: a?.order ?? [], b: b?.order ?? [] }) && isSameList({ a: a?.hidden ?? [], b: b?.hidden ?? [] });
 
 /** @param {{ a: TabSkills, b: TabSkills, tab: Tab }} params */
 const isSameTab = ({ a, b, tab }) =>
@@ -437,11 +497,7 @@ export const getAskPrompt = (ref) => `Read ${ref} and wait for my questions. Don
 // their repo. A row whose skill is missing shows "open" instead of starting an unknown command.
 /** @param {{ skills: Skills, installedSkills: string[] | null, repo?: RepoSkills | null }} params @returns {Skills} */
 export function getRunnableSkills({ skills, installedSkills, repo = null }) {
-  /** @param {TabSkills} tabSkills @returns {TabSkills} */
-  const runnable = (tabSkills) => {
-    const list = tabSkills.list.filter((entry) => canRunEntry({ entry, installedSkills, repo }));
-    const names = list.map((e) => e.name);
-    return keepCaseSkills({ tabSkills: { ...tabSkills, list }, isKept: (name) => names.includes(name) });
-  };
-  return { github: runnable(skills.github), linear: runnable(skills.linear) };
+  /** @param {TabSkills} tabSkills @param {Tab} tab @returns {TabSkills} */
+  const runnable = (tabSkills, tab) => keepSkills({ tabSkills, list: tabSkills.list.filter((entry) => canRunEntry({ entry, installedSkills, repo })), tab });
+  return { github: runnable(skills.github, "github"), linear: runnable(skills.linear, "linear") };
 }

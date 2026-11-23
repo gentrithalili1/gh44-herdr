@@ -278,7 +278,10 @@ export class SettingsView {
   render() {
     const t = theme();
     const settings = this.getSettings();
+    // A case entry being dragged drops on release over a case row (it handles it first);
+    // a release anywhere else cancels the drag.
     return v_flex().flex_1().min_h(0)
+      .on_mouse_up("left", (_e, cx) => this.caseEditor.cancelDrag(cx))
       .child(div().flex_none().px(GUTTER).pt(12).pb(12).border_b(1).border_color(t.border).child(this.sectionSwitch()))
       .child(v_flex().id("settings-list").flex_1().min_h(0).overflow_y_scrollbar().px(GUTTER).pt(14).pb(14).gap(18)
         .children(this.settingsGroups(settings)))
