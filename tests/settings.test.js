@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getTicketSkills, getTabSkills, getKeySkills, getKeyHints,
   addSkill, removeSkill, setSkillKey, setDefaultSkill, setCaseHidden, getCaseActions, hasNoDefaults, isValidSkillName,
-  getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills, getRunnableSkills, getAskPrompt, canRun, ASK_ACTION,
+  getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills, getRunnableSkills, getAskPrompt, canRun, canRunEntry, ASK_ACTION,
 } from "../mods/hub/settings.js";
 
 const { skills } = getSettings({ saved: undefined });
@@ -360,4 +360,31 @@ test("rows skip saved skills that are not installed, and keep plugin skills", ()
   assert.equal(getDefaultSkill({ skills: some, tab: "linear", situation: "todo" }), "gh44-plan");
   assert.equal(getDefaultSkill({ skills: some, tab: "linear", situation: "inProgress" }), null);
   assert.deepEqual(getRunnableSkills({ skills: saved, installedSkills: null }), saved);
+});
+
+test("a repo skill is saved with its repo and offered only while that repo is focused", () => {
+  const added = addSkill({ skills, tab: "linear", skill: "deploy-preview", repo: "acme/web" });
+  assert.deepEqual(added.linear.list.at(-1), { name: "deploy-preview", key: null, repo: "acme/web" });
+  const withDefault = setDefaultSkill({ skills: added, tab: "linear", situation: "inProgress", skill: "deploy-preview" });
+  const { skills: saved } = getSettings({ saved: JSON.parse(JSON.stringify({ skills: withDefault })) });
+  assert.equal(saved.linear.list.at(-1)?.repo, "acme/web");
+  const inRepo = getRunnableSkills({ skills: saved, installedSkills: null, repo: { name: "acme/web", skills: ["deploy-preview"] } });
+  assert.ok(getTabSkills({ skills: inRepo, tab: "linear" }).includes("deploy-preview"));
+  assert.equal(getDefaultSkill({ skills: inRepo, tab: "linear", situation: "inProgress" }), "deploy-preview");
+  const elsewhere = getRunnableSkills({ skills: saved, installedSkills: null, repo: { name: "acme/api", skills: ["deploy-preview"] } });
+  assert.ok(!getTabSkills({ skills: elsewhere, tab: "linear" }).includes("deploy-preview"));
+  assert.equal(getDefaultSkill({ skills: elsewhere, tab: "linear", situation: "inProgress" }), null);
+  assert.ok(!getTabSkills({ skills: getRunnableSkills({ skills: saved, installedSkills: null }), tab: "linear" }).includes("deploy-preview"));
+});
+
+test("a repo skill needs its repo's .claude to still have it; an unlisted repo keeps it", () => {
+  const entry = { name: "deploy-preview", key: null, repo: "acme/web" };
+  assert.equal(canRunEntry({ entry, installedSkills: [], repo: { name: "acme/web", skills: [] } }), false);
+  assert.equal(canRunEntry({ entry, installedSkills: [], repo: { name: "acme/web", skills: null } }), true);
+  assert.equal(canRunEntry({ entry: { name: "gh44-plan", key: null }, installedSkills: ["gh44-plan"], repo: null }), true);
+});
+
+test("repo skills don't count toward the installed gh44 skills", () => {
+  const added = addSkill({ skills: getGh44Setup(), tab: "github", skill: "deploy-preview", repo: "acme/web" });
+  assert.deepEqual(countInstalledSkills({ skills: added, installedSkills: [] }), { installed: 0, total: 6 });
 });

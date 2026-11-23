@@ -2,7 +2,7 @@
 // Also Ask, and the gh44 installs and uninstall.
 import { run, spaces, agents, appHome, home, notify, openOverlay, exec } from "herdr";
 import { moveIssueToInProgress } from "./linear.js";
-import { getIssueStage, shortSkill, getAskPrompt, ASK_ACTION } from "./settings.js";
+import { getIssueStage, shortSkill, getAskPrompt, isValidSkillName, ASK_ACTION } from "./settings.js";
 
 // Starting work on a ticket that is not started yet moves it to In Progress.
 const NOT_STARTED_STAGES = ["backlog", "todo"];
@@ -121,6 +121,27 @@ export async function loadInstalledSkills() {
     const r = await exec("find", [folder, "-mindepth", "1", "-maxdepth", "1", "(", "-type", "d", "-o", "-type", "l", ")"]);
     if (r.code !== 0) return null;
     return r.stdout.split("\n").map((path) => path.trim().split("/").pop()).filter((name) => name && !name.startsWith("."));
+  } catch {
+    return null;
+  }
+}
+
+// Lists a checkout's .claude/skills folders (one per line, "skills/<name>/") and .claude/commands/*.md.
+const LIST_REPO_SKILLS = 'cd "$0/.claude" 2>/dev/null || exit 0; for p in skills/*/ commands/*.md; do [ -e "$p" ] && echo "$p"; done; exit 0';
+const REPO_SKILL_PATH = /^(?:skills\/([^/]+)\/|commands\/([^/]+)\.md)$/;
+
+// The repo's own skills and commands, from the checkout holding folder (a worktree has its own).
+// [] when it has none or folder is not in a repo; null when they couldn't be listed.
+/** @param {{ folder: string | null | undefined, machine?: string }} params @returns {Promise<string[] | null>} */
+export async function loadRepoSkills({ folder, machine }) {
+  if (!folder) return [];
+  try {
+    const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd: folder, on: machine });
+    if (top.code !== 0) return [];
+    const r = await exec("sh", ["-c", LIST_REPO_SKILLS, top.stdout.trim()], { on: machine });
+    if (r.code !== 0) return null;
+    const names = r.stdout.split("\n").map((line) => line.trim().match(REPO_SKILL_PATH)).map((m) => m?.[1] ?? m?.[2]);
+    return [...new Set(names.filter((name) => typeof name === "string" && isValidSkillName(name)))];
   } catch {
     return null;
   }

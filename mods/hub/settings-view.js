@@ -9,7 +9,7 @@ import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
 import { loadInstalledSkills, uninstallGh44Herdr } from "./actions.js";
 import { openGh44Dialog } from "./gh44-dialog.js";
 import { CaseEditor } from "./case-editor.js";
-import { addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRun, ASK_ACTION, ASK_DESCRIPTION } from "./settings.js";
+import { addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS, LINEAR_SITUATIONS, canRunEntry, shortRepo, ASK_ACTION, ASK_DESCRIPTION } from "./settings.js";
 
 /** @typedef {"general" | "github" | "linear"} SectionId */
 /** @typedef {"linearKey" | "skillKey" | "addSkill"} InputId */
@@ -18,6 +18,7 @@ import { addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS
  *   login: string | null,
  *   linearAccount: { status: "idle" | "checking" | "connected" | "missing" | "failed", name?: string, message?: string },
  *   installedSkills: string[] | null,
+ *   repo: import("./settings.js").RepoSkills,
  * }} Session
  */
 
@@ -59,15 +60,17 @@ export class SettingsView {
    *   patchSettings: (patch: Record<string, unknown>) => void,
    *   saveSkills: (params: { tab: "github" | "linear", skills: import("./settings.js").Skills }) => void,
    *   onLinearKeyChange: (cx: import("gpui-kit").Context) => void,
+   *   reloadRepoSkills: (cx: import("gpui-kit").Context) => void,
    *   focusPanel: () => void,
    * }} host
    */
-  constructor({ session, getSettings, patchSettings, saveSkills, onLinearKeyChange, focusPanel }) {
+  constructor({ session, getSettings, patchSettings, saveSkills, onLinearKeyChange, reloadRepoSkills, focusPanel }) {
     this.session = session;
     this.getSettings = getSettings;
     this.patchSettings = patchSettings;
     this.saveSkills = saveSkills;
     this.onLinearKeyChange = onLinearKeyChange;
+    this.reloadRepoSkills = reloadRepoSkills;
     this.focusPanel = focusPanel;
     this.isOpen = false;
     // The last section shown, kept for the session.
@@ -98,7 +101,7 @@ export class SettingsView {
     this.isAddSkillRefused = false;
     this.addSkillInput = InputState.new({ placeholder: "Skill name, as in /name" });
     this.addSkillInput.on("change", (_e, cx) => { this.isAddSkillRefused = false; cx.notify(); });
-    this.addSkillInput.on("submit", (_e, cx) => this.handleAddSkill({ skill: this.addSkillInput.value(), cx }));
+    this.addSkillInput.on("submit", (_e, cx) => this.handleAddSkill({ skill: this.addSkillInput.value(), repo: this.getTypedSkillRepo(), cx }));
     this.trackFocus({ input: this.addSkillInput, id: "addSkill" });
   }
 
@@ -122,6 +125,7 @@ export class SettingsView {
     this.isOpen = true;
     if (section) this.sectionId = section;
     this.loadSkillList(cx);
+    this.reloadRepoSkills(cx);
     if (!this.getSettings().shouldShowLinear || this.session.linearAccount.status === "checking") return;
     this.session.linearAccount = { status: "checking" };
     cx.spawn(async (cx) => {
@@ -162,8 +166,16 @@ export class SettingsView {
     cx.notify();
   }
 
-  /** @param {{ skill: string, cx: import("gpui-kit").Context }} params */
-  handleAddSkill({ skill, cx }) {
+  // A typed name only the focused repo has is added as that repo's skill.
+  getTypedSkillRepo() {
+    const name = this.addSkillInput.value().trim();
+    const { repo, installedSkills } = this.session;
+    const isRepoOnly = Boolean(repo.skills?.includes(name)) && !installedSkills?.includes(name);
+    return isRepoOnly ? repo.name : null;
+  }
+
+  /** @param {{ skill: string, repo: string | null, cx: import("gpui-kit").Context }} params */
+  handleAddSkill({ skill, repo, cx }) {
     const name = skill.trim();
     if (!this.addingTab || !name) return;
     if (!isValidSkillName(name)) {
@@ -171,7 +183,7 @@ export class SettingsView {
       cx.notify();
       return;
     }
-    this.saveSkills({ tab: this.addingTab, skills: addSkill({ skills: this.getSettings().skills, tab: this.addingTab, skill: name }) });
+    this.saveSkills({ tab: this.addingTab, skills: addSkill({ skills: this.getSettings().skills, tab: this.addingTab, skill: name, repo }) });
     this.addSkillInput.set_value("");
     this.addingTab = null;
     this.focusPanel();
@@ -419,22 +431,34 @@ export class SettingsView {
   }
 
   // A tab's actions (name, key letter, remove), then Add skill. Ask is built in: no remove.
+  // A repo skill carries its repo's name; rows offer it only while that repo is focused.
   /** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills }} params */
   skillListRows({ tab, skills }) {
     const t = theme();
     const list = skills[tab].list;
-    /** @param {string} skill */
-    const isRunnable = (skill) => canRun({ skill, installedSkills: this.session.installedSkills });
+    const { installedSkills, repo } = this.session;
     const skillRows = list.map((entry) => {
       const isAsk = entry.name === ASK_ACTION;
+      const isOtherRepo = Boolean(entry.repo) && entry.repo !== repo.name;
+      const isRunnable = isOtherRepo || canRunEntry({ entry, installedSkills, repo });
       return h_flex().id(`skill-${tab}-${entry.name}`).h(28).px(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable(entry.name) ? t.foreground : t.dim).child(entry.name))
-        .when(!isRunnable(entry.name), (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child("not installed")))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable && !isOtherRepo ? t.foreground : t.dim).child(entry.name))
+        .when(Boolean(entry.repo), (el) => el.child(this.repoTag({ repo: entry.repo ?? "", isCurrent: !isOtherRepo })))
+        .when(!isRunnable, (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child(entry.repo ? "not in repo" : "not installed")))
         .when(isAsk, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).tooltip(ASK_DESCRIPTION).child("built in")))
         .child(this.skillKeyCell({ tab, entry }))
         .child(isAsk ? div().size(22).flex_none() : this.removeSkillButton({ tab, skills, skill: entry.name }));
     });
     return [...skillRows, this.addSkillRow({ tab, list })];
+  }
+
+  // The repo a skill belongs to; dim when it is not the focused one.
+  /** @param {{ repo: string, isCurrent: boolean }} params */
+  repoTag({ repo, isCurrent }) {
+    const t = theme();
+    return div().flex_none().px(6).h(18).flex().items_center().rounded(4).border(1).border_color(t.border).text_size(11)
+      .text_color(isCurrent ? t.muted : t.dim).tooltip(`Only in ${repo}`)
+      .child(shortRepo(repo));
   }
 
   /** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills, skill: string }} params */
@@ -478,7 +502,7 @@ export class SettingsView {
       .child(entry.key ?? "–");
   }
 
-  // "+ Add skill", or the field with the installed skills not in the list yet.
+  // "+ Add skill", or the field with the focused repo's skills and the installed ones not in the list yet.
   /** @param {{ tab: "github" | "linear", list: { name: string }[] }} params */
   addSkillRow({ tab, list }) {
     const t = theme();
@@ -495,7 +519,13 @@ export class SettingsView {
     }
     const typed = this.addSkillInput.value().trim().toLowerCase();
     const names = new Set(list.map((e) => e.name));
-    const suggestions = (this.session.installedSkills ?? []).filter((name) => !names.has(name) && name.toLowerCase().includes(typed)).slice(0, SKILL_SUGGESTIONS);
+    const { repo, installedSkills } = this.session;
+    /** @type {{ name: string, repo: string | null }[]} */
+    const candidates = [
+      ...(repo.name ? (repo.skills ?? []).map((name) => ({ name, repo: repo.name })) : []),
+      ...(installedSkills ?? []).filter((name) => !repo.skills?.includes(name)).map((name) => ({ name, repo: null })),
+    ];
+    const suggestions = candidates.filter((c) => !names.has(c.name) && c.name.toLowerCase().includes(typed)).slice(0, SKILL_SUGGESTIONS);
     return v_flex().flex_none().gap(4)
       .child(h_flex().h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.accent).bg(t.background)
         .child(Input.new(this.addSkillInput).flex_1().text_size(12).text_color(t.foreground))
@@ -503,14 +533,15 @@ export class SettingsView {
           .on_mouse_down("left", stop)
           .on_click((_e, cx) => { this.addingTab = null; this.focusPanel(); cx.notify(); })
           .child("Cancel")))
-      .children(suggestions.map((name) => h_flex().id(`skill-suggest-${tab}-${name}`).h(26).px(8).gap(6).items_center().rounded(6).cursor_pointer()
+      .children(suggestions.map((c) => h_flex().id(`skill-suggest-${tab}-${c.name}`).h(26).px(8).gap(6).items_center().rounded(6).cursor_pointer()
         .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
         .on_mouse_down("left", stop)
-        .on_click((_e, cx) => this.handleAddSkill({ skill: name, cx }))
+        .on_click((_e, cx) => this.handleAddSkill({ skill: c.name, repo: c.repo, cx }))
         .child(div().text_color(t.accent).child("+"))
-        .child(name)))
+        .child(div().flex_1().min_w(0).truncate().child(c.name))
+        .when(Boolean(c.repo), (el) => el.child(this.repoTag({ repo: c.repo ?? "", isCurrent: true })))))
       .when(suggestions.length === 0, (el) => el.child(div().px(8).text_size(11.5).text_color(t.dim)
-        .child(typed ? "↵ adds it by this name" : "No more skills in ~/.claude/skills. Type a name.")))
+        .child(typed ? "↵ adds it by this name" : "No more skills in ~/.claude/skills or this repo's .claude. Type a name.")))
       .when(this.isAddSkillRefused, (el) => el.child(div().px(8).text_size(11.5).text_color(palette(t).danger)
         .child("A skill name is one word: letters, digits, _ : . or -")));
   }
