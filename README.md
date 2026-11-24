@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/gh44-omnia-logo.png" alt="gh44-omnia" width="200"></p>
+<p align="center"><img src="docs/gh44-omnia.png" alt="gh44-omnia" width="200"></p>
 <h1 align="center">gh44-omnia</h1>
 <p align="center"><strong>Your tickets, your code and the agents that work on them, in one Herdr window.<br>Pick a ticket, start a skill, and watch the agent do it in the right worktree.</strong></p>
 
