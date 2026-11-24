@@ -14,11 +14,7 @@ A repo can bring its own skills. With a terminal in the repo focused, **+ Add sk
 
 ## On-call
 
-The Work panel's **On-call** tab watches your error tracker while you are on call and tells you only about the issues that need you. A background service checks for new issues, an AI triages each one against your domain and rules, and you get a notification with a short report and a suggested fix. It keeps running with Herdr closed.
-
-It works with Sentry. Set it up in ⚙ settings › On-call: paste a Sentry token, pick your projects and repo, and describe your domain. See [mods/hub/oncall](mods/hub/oncall/README.md).
-
-<img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
+The **On-call** tab watches Sentry in the background and notifies you only about issues in your domain, each with an AI report and a suggested fix. Set it up in ⚙ settings › On-call. See [mods/hub/oncall](mods/hub/oncall/README.md).
 
 ## Community mods
 
@@ -75,4 +71,5 @@ To remove it:
   <img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="240">
   <img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="240">
   <img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="240">
+  <img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
 </p>
