@@ -141,7 +141,7 @@ const RERUN_TIMEOUT_MS = 15 * 60_000;
 export const isRerunPending = ({ decision, requestedAt, now }) =>
   Boolean(requestedAt) && decision.decidedAt < String(requestedAt) && now - Date.parse(String(requestedAt)) < RERUN_TIMEOUT_MS;
 
-// How much of the next-check ring is left: full right after a check, empty when the next one is due.
+// How much time is left until the next check, 0 to 1: 1 right after a check, 0 when it is due.
 /** @param {{ msLeft: number, periodMs: number }} params */
 export function getCountdownLeft({ msLeft, periodMs }) {
   if (periodMs <= 0) return 0;

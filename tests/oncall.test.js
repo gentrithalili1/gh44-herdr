@@ -341,7 +341,7 @@ test("the filters narrow any view by severity, project, decided by, time and see
   assert.deepEqual(ids({ seen: "seen" }, [seenKey(items.a)]), ["c", "a"]);
 });
 
-test("the countdown ring is full right after a check and empty when the next one is due", () => {
+test("the time left is 1 right after a check and 0 when the next one is due", () => {
   assert.equal(getCountdownLeft({ msLeft: 120_000, periodMs: 120_000 }), 1);
   assert.equal(getCountdownLeft({ msLeft: 60_000, periodMs: 120_000 }), 0.5);
   assert.equal(getCountdownLeft({ msLeft: 0, periodMs: 120_000 }), 0);
