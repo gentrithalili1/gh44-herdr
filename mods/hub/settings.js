@@ -2,10 +2,11 @@
 // which one it runs.
 // Pure, so tests/ can load it without Herdr.
 
-/** @typedef {"github" | "linear"} Tab */
+/** @typedef {"github" | "linear" | "oncall"} Tab */
 /** @typedef {"myConflicts" | "myChecksFailing" | "myChangesRequested" | "myApproved" | "myDraft" | "myPullRequest" | "othersPullRequest"} GithubSituation */
 /** @typedef {"backlog" | "todo" | "inProgress" | "inProgressWithPullRequest" | "reviewMine" | "reviewOthers"} LinearSituation */
-/** @typedef {GithubSituation | LinearSituation} Situation */
+/** @typedef {"critical" | "high" | "needsYou" | "notForYou" | "filtered" | "failed"} OncallSituation */
+/** @typedef {GithubSituation | LinearSituation | OncallSituation} Situation */
 /** @typedef {{ author: string, hasConflicts: boolean, ci: "passing" | "failing" | "pending" | "none", decision: string | null, isDraft: boolean }} PullRequestShape */
 // repo: a repo's own skill ("owner/name"), offered only while that repo is focused.
 /** @typedef {{ name: string, key: string | null, repo?: string }} Skill */
@@ -18,13 +19,20 @@
 /** @typedef {Record<Tab, TabSkills>} Skills */
 /** @typedef {"ask" | "worktree" | "here"} WhereToRun */
 /** @typedef {"review" | "work" | "ask" | "other"} SkillRole */
-/** @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowKeyHints: boolean, whereToRun: WhereToRun, skills: Skills }} Settings */
+/** @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowOncall: boolean, shouldShowKeyHints: boolean, whereToRun: WhereToRun, skills: Skills }} Settings */
+/** @typedef {Tab} PanelTab */
 
 // Ask: a built-in action, not a skill. Claude reads the PR or ticket and waits for questions.
 export const ASK_ACTION = "ask";
 const ASK_KEY = "q";
 export const ASK_DESCRIPTION = "Ask: Claude reads it in a new tab here and waits for your questions. It changes no code.";
 const ASK_ENTRY = { name: ASK_ACTION, key: ASK_KEY };
+// Continue: a built-in On-call action. Claude picks up the triage's own session in a new tab.
+export const CONTINUE_ACTION = "continue";
+const CONTINUE_KEY = "c";
+export const CONTINUE_DESCRIPTION = "Continue: the AI triage's Claude session, picked up in a new tab with everything it found.";
+const CONTINUE_ENTRY = { name: CONTINUE_ACTION, key: CONTINUE_KEY };
+const BUILT_IN_ACTIONS = [ASK_ACTION, CONTINUE_ACTION];
 // In a case's order: the main button opens the PR or ticket. Not a valid skill name, so no skill clashes.
 export const OPEN_ENTRY = "(open)";
 
@@ -65,6 +73,11 @@ const BUILT_IN_SKILLS = {
       reviewOthers: "gh44-code-review",
     },
   },
+  // On-call rows open the AI's report by default; Continue and the skills are a key or a click away.
+  oncall: {
+    list: [CONTINUE_ENTRY, { name: "gh44-debug", key: "d" }, ASK_ENTRY],
+    defaults: {},
+  },
 };
 
 // In first-match order: a row's case is the first one that fits it.
@@ -87,7 +100,16 @@ export const LINEAR_SITUATIONS = [
   { id: "reviewMine", label: "In review, my PR" },
   { id: "reviewOthers", label: "In review, someone else's PR" },
 ];
-const SITUATIONS = { github: GITHUB_SITUATIONS, linear: LINEAR_SITUATIONS };
+/** @type {{ id: OncallSituation, label: string }[]} */
+export const ONCALL_SITUATIONS = [
+  { id: "critical", label: "Critical, needs you" },
+  { id: "high", label: "High, needs you" },
+  { id: "needsYou", label: "Needs you, medium or low" },
+  { id: "notForYou", label: "AI: not for you" },
+  { id: "filtered", label: "Filtered without the AI" },
+  { id: "failed", label: "Triage failed" },
+];
+const SITUATIONS = { github: GITHUB_SITUATIONS, linear: LINEAR_SITUATIONS, oncall: ONCALL_SITUATIONS };
 
 // A case from one default (a skill, or none): it goes first and shows; the rest follow in the
 // list's order, and with no default OPEN_ENTRY goes first. Also reads cases saved before order.
@@ -145,7 +167,7 @@ const builtInTab = (tab) => {
 };
 
 /** @type {Record<Tab, TabSkills>} */
-const DEFAULT_SKILLS = { github: builtInTab("github"), linear: builtInTab("linear") };
+const DEFAULT_SKILLS = { github: builtInTab("github"), linear: builtInTab("linear"), oncall: builtInTab("oncall") };
 /** @type {WhereToRun[]} */
 const WHERE_TO_RUN = ["ask", "worktree", "here"];
 // Taken by the panel itself: j/k move, o opens.
@@ -188,23 +210,26 @@ function readSavedCases({ saved, tab, names }) {
   }));
 }
 
-// A list saved before Ask gets it at the end, on its key unless another skill has it.
-/** @param {Skill[]} list @returns {Skill[]} */
-const withAsk = (list) => {
-  if (list.some((e) => e.name === ASK_ACTION)) return list;
-  return [...list, { name: ASK_ACTION, key: list.some((e) => e.key === ASK_KEY) ? null : ASK_KEY }];
+// A list saved before a built-in action gets it at the end, on its key unless another skill has it.
+/** @param {{ list: Skill[], name: string, key: string }} params @returns {Skill[]} */
+const withBuiltIn = ({ list, name, key }) => {
+  if (list.some((e) => e.name === name)) return list;
+  return [...list, { name, key: list.some((e) => e.key === key) ? null : key }];
 };
+/** @param {Skill[]} list */
+const withAsk = (list) => withBuiltIn({ list, name: ASK_ACTION, key: ASK_KEY });
 
 // A saved tab's skills, read back safely: unknown entries dropped, cases only from its list.
 /** @param {{ saved: unknown, tab: Tab }} params @returns {TabSkills | null} */
 function readTabSkills({ saved, tab }) {
   const s = toRecord(saved);
   if (!Array.isArray(s.list)) return null;
-  const list = withAsk(s.list.map(toRecord).filter((e) => typeof e.name === "string" && isValidSkillName(e.name))
+  const read = withAsk(s.list.map(toRecord).filter((e) => typeof e.name === "string" && isValidSkillName(e.name))
     .map((e) => ({
       name: String(e.name), key: typeof e.key === "string" && KEY_LETTER.test(e.key) ? e.key : null,
       ...(typeof e.repo === "string" && e.repo ? { repo: e.repo } : {}),
     })));
+  const list = tab === "oncall" ? withBuiltIn({ list: read, name: CONTINUE_ACTION, key: CONTINUE_KEY }) : read;
   const cases = readSavedCases({ saved: s, tab, names: list.map((e) => e.name) });
   return keepSkills({ tabSkills: { list, cases }, list, tab });
 }
@@ -229,19 +254,22 @@ export function getSettings({ saved, installedSkills = null }) {
     // One tab always shows: with Linear hidden, GitHub stays.
     shouldShowGithub: s.shouldShowGithub !== false || !shouldShowLinear,
     shouldShowLinear,
+    shouldShowOncall: s.shouldShowOncall !== false,
     whereToRun: WHERE_TO_RUN.find((w) => w === s.whereToRun) ?? "ask",
     shouldShowKeyHints: s.shouldShowKeyHints !== false,
     skills: {
       github: readTabSkills({ saved: skills.github, tab: "github" }) ?? getDefaultTabSkills({ tab: "github", installedSkills }),
       linear: readTabSkills({ saved: skills.linear, tab: "linear" }) ?? getDefaultTabSkills({ tab: "linear", installedSkills }),
+      oncall: readTabSkills({ saved: skills.oncall, tab: "oncall" }) ?? getDefaultTabSkills({ tab: "oncall", installedSkills }),
     },
   };
 }
 
 // The tab to show: the saved one while it is shown, else the other.
-/** @param {{ saved: unknown, settings: Settings }} params @returns {Tab} */
+/** @param {{ saved: unknown, settings: Settings }} params @returns {PanelTab} */
 export function getShownTab({ saved, settings }) {
   if (saved === "linear" && settings.shouldShowLinear) return "linear";
+  if (saved === "oncall" && settings.shouldShowOncall) return "oncall";
   return settings.shouldShowGithub ? "github" : "linear";
 }
 
@@ -269,10 +297,10 @@ export function addSkill({ skills, tab, skill, repo = null }) {
   return withTab({ skills, tab, tabSkills: fitCases({ tabSkills: { ...current, list: [...current.list, { name, key: null, ...(repo ? { repo } : {}) }] }, tab }) });
 }
 
-// Also clears it from every case, so no row runs a skill the menu no longer has. Ask stays.
+// Also clears it from every case, so no row runs a skill the menu no longer has. Built-in actions stay.
 /** @param {{ skills: Skills, tab: Tab, skill: string }} params @returns {Skills} */
 export function removeSkill({ skills, tab, skill }) {
-  if (skill === ASK_ACTION) return skills;
+  if (BUILT_IN_ACTIONS.includes(skill)) return skills;
   const current = skills[tab];
   return withTab({ skills, tab, tabSkills: keepSkills({ tabSkills: current, list: current.list.filter((e) => e.name !== skill), tab }) });
 }
@@ -344,6 +372,18 @@ export function getGithubSituation({ pr, login }) {
   if (pr.decision === "CHANGES_REQUESTED") return "myChangesRequested";
   if (pr.decision === "APPROVED") return "myApproved";
   return pr.isDraft ? "myDraft" : "myPullRequest";
+}
+
+// An On-call row's case: how much it needs you, from the service's decision.
+/** @param {{ outcome: string, stage: string, severity: string | null, isNotified: boolean }} decision @returns {OncallSituation} */
+export function getOncallSituation(decision) {
+  if (decision.outcome === "failed") return "failed";
+  if (decision.outcome === "reported" && decision.isNotified) {
+    if (decision.severity === "critical") return "critical";
+    return decision.severity === "high" ? "high" : "needsYou";
+  }
+  if (decision.outcome === "reported") return "needsYou";
+  return decision.stage === "ai" ? "notForYou" : "filtered";
 }
 
 /** @param {{ stateType: string, state: string, isMyPullRequest: boolean, prUrl: string | null }} issue @returns {LinearSituation} */
@@ -431,7 +471,7 @@ export const getKeySkills = ({ skills, tab, actions }) => Object.fromEntries(ski
 /** @param {string} skill */
 export const shortSkill = (skill) => skill.replace(/^gh44-/, "");
 
-/** @param {{ skills: Skills, tab: Tab }} params */
+/** @param {{ skills: Skills, tab: PanelTab }} params */
 export function getKeyHints({ skills, tab }) {
   const keys = skills[tab].list.filter((s) => s.key).map((s) => `${s.key} ${shortSkill(s.name)}`);
   return ["j/k move", "↵ run", ...keys, "o open", "/ search"].join(" · ");
@@ -446,7 +486,7 @@ const copyTab = (tab) => ({
 // The suggested setup: the gh44 skills from gh44-brain on both tabs, with their keys and defaults.
 // A fresh copy, so an edit never reaches the built-in one.
 /** @returns {Skills} */
-export const getGh44Setup = () => ({ github: copyTab(DEFAULT_SKILLS.github), linear: copyTab(DEFAULT_SKILLS.linear) });
+export const getGh44Setup = () => ({ github: copyTab(DEFAULT_SKILLS.github), linear: copyTab(DEFAULT_SKILLS.linear), oncall: copyTab(DEFAULT_SKILLS.oncall) });
 
 /** @param {{ a: string[], b: string[] }} params */
 const isSameList = ({ a, b }) => a.length === b.length && a.every((name, i) => name === b[i]);
@@ -463,13 +503,14 @@ const isSameTab = ({ a, b, tab }) =>
 /** @param {{ skills: Skills }} params */
 export function isUsingGh44Setup({ skills }) {
   return isSameTab({ a: skills.github, b: DEFAULT_SKILLS.github, tab: "github" })
-    && isSameTab({ a: skills.linear, b: DEFAULT_SKILLS.linear, tab: "linear" });
+    && isSameTab({ a: skills.linear, b: DEFAULT_SKILLS.linear, tab: "linear" })
+    && isSameTab({ a: skills.oncall, b: DEFAULT_SKILLS.oncall, tab: "oncall" });
 }
 
 // How many of the skills (each counted once, across both tabs, Ask and repo skills aside) are installed.
 /** @param {{ skills: Skills, installedSkills: string[] }} params */
 export function countInstalledSkills({ skills, installedSkills }) {
-  const names = new Set([...skills.github.list, ...skills.linear.list].filter((e) => !e.repo).map((e) => e.name).filter((name) => name !== ASK_ACTION));
+  const names = new Set([...skills.github.list, ...skills.linear.list, ...skills.oncall.list].filter((e) => !e.repo).map((e) => e.name).filter((name) => !BUILT_IN_ACTIONS.includes(name)));
   return { installed: [...names].filter((name) => installedSkills.includes(name)).length, total: names.size };
 }
 
@@ -477,7 +518,7 @@ export function countInstalledSkills({ skills, installedSkills }) {
 // listed there. Ask is built in. null: not listed yet, all of them.
 /** @param {{ skill: string, installedSkills: string[] | null }} params */
 export const canRun = ({ skill, installedSkills }) =>
-  !installedSkills || skill === ASK_ACTION || skill.includes(":") || installedSkills.includes(skill);
+  !installedSkills || BUILT_IN_ACTIONS.includes(skill) || skill.includes(":") || installedSkills.includes(skill);
 
 // A repo skill runs only in its repo, while the repo's .claude has it. Any other entry: canRun.
 /** @param {{ entry: Skill, installedSkills: string[] | null, repo: RepoSkills | null }} params */
@@ -499,5 +540,25 @@ export const getAskPrompt = (ref) => `Read ${ref} and wait for my questions. Don
 export function getRunnableSkills({ skills, installedSkills, repo = null }) {
   /** @param {TabSkills} tabSkills @param {Tab} tab @returns {TabSkills} */
   const runnable = (tabSkills, tab) => keepSkills({ tabSkills, list: tabSkills.list.filter((entry) => canRunEntry({ entry, installedSkills, repo })), tab });
-  return { github: runnable(skills.github, "github"), linear: runnable(skills.linear, "linear") };
+  return { github: runnable(skills.github, "github"), linear: runnable(skills.linear, "linear"), oncall: runnable(skills.oncall, "oncall") };
+}
+
+/** @type {PanelTab[]} */
+const PANEL_TABS = ["github", "linear", "oncall"];
+
+// The header's tab order: the saved one, without unknown or repeated tabs, then any it lacks.
+/** @param {unknown} saved @returns {PanelTab[]} */
+export function getTabOrder(saved) {
+  const listed = Array.isArray(saved) ? PANEL_TABS.filter((tab) => saved.includes(tab)).sort((a, b) => saved.indexOf(a) - saved.indexOf(b)) : [];
+  return [...listed, ...PANEL_TABS.filter((tab) => !listed.includes(tab))];
+}
+
+// A tab dropped at an index of the order (before the tab there; the length: last).
+/** @param {{ order: PanelTab[], tab: PanelTab, to: number }} params @returns {PanelTab[]} */
+export function moveTab({ order, tab, to }) {
+  const from = order.indexOf(tab);
+  if (from === -1 || to === from || to === from + 1) return order;
+  const rest = order.filter((t) => t !== tab);
+  const at = Math.max(0, Math.min(to > from ? to - 1 : to, rest.length));
+  return [...rest.slice(0, at), tab, ...rest.slice(at)];
 }

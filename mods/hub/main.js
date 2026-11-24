@@ -19,15 +19,20 @@ import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
+import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall.js";
+import { OncallView, ReportView, oncallMenuRows } from "./oncall-view.js";
+import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall-decisions.js";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getCaseActions, getTicketSkills,
-  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills, ASK_ACTION, ASK_DESCRIPTION,
+  getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills, getTabOrder, moveTab, ASK_ACTION, ASK_DESCRIPTION,
 } from "./settings.js";
 
 const NO_MENU_ROW = -1;
 
 const STORE = {
   tab: "hub.tab",
+  // The header tabs' order, changed by dragging a tab.
+  tabOrder: "hub.tabOrder",
   github: "hub.github.filters",
   linear: "hub.linear.filters",
   collapsed: "hub.collapsed",
@@ -37,7 +42,11 @@ const STORE = {
 };
 // GitHub filters are kept per repo ("hub.github.filters|<repo id>"); Linear's are shared.
 const isGithubStore = (store) => store.startsWith(STORE.github);
-const defaultsFor = (store) => (isGithubStore(store) ? GITHUB_DEFAULTS : LINEAR_DEFAULTS);
+/** @param {string} store */
+const defaultsFor = (store) => {
+  if (store === ONCALL_FILTERS_STORE) return ONCALL_DEFAULTS;
+  return isGithubStore(store) ? GITHUB_DEFAULTS : LINEAR_DEFAULTS;
+};
 
 const TICK_MS = 1000;
 const REFRESH_MS = 120_000;
@@ -170,8 +179,10 @@ function loadFocusedRepo({ cx, repoId, folder }) {
     cx.notify();
   });
 }
-/** @type {Record<string, "general" | "github" | "linear">} */
-const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear" };
+/** @type {Record<string, "general" | "github" | "linear" | "oncall">} */
+const SETTINGS_COMMANDS = { "settings-general": "general", "settings-github": "github", "settings-linear": "linear", "settings-oncall": "oncall" };
+// On-call was on when Herdr last closed: its service is started again once per app run.
+let hasResumedOncall = false;
 /** @param {string} url */
 const toGithubLink = (url) => ({ id: "github", label: "Open in GitHub", icon: "github", url });
 /** @param {string} url */
@@ -207,7 +218,7 @@ const getSavedSettings = () => {
 /** @param {Record<string, unknown>} patch */
 const patchSettings = (patch) => setShared(STORE.settings, { ...getSavedSettings(), ...patch });
 // Only the tab that changed is saved; the other keeps following the defaults until edited.
-/** @param {{ tab: "github" | "linear", skills: import("./settings.js").Skills }} params */
+/** @param {{ tab: import("./settings.js").Tab, skills: import("./settings.js").Skills }} params */
 const saveSkills = ({ tab, skills }) => {
   const saved = getSavedSettings();
   const savedSkills = "skills" in saved && saved.skills && typeof saved.skills === "object" ? saved.skills : {};
@@ -215,7 +226,7 @@ const saveSkills = ({ tab, skills }) => {
 };
 // One render reads settings and the shown tab for every row; build them once per render.
 // Outside a render (handlers, ticks) they are read fresh.
-/** @type {{ settings: import("./settings.js").Settings, tab: "github" | "linear" } | null} */
+/** @type {{ settings: import("./settings.js").Settings, tab: import("./settings.js").PanelTab } | null} */
 let frame = null;
 const readPanelSettings = () => getSettings({ saved: shared(STORE.settings), installedSkills: session.installedSkills });
 const getPanelSettings = () => frame?.settings ?? readPanelSettings();
@@ -271,13 +282,23 @@ const countPicked = ({ store, def }) => {
   return def.isMulti ? value.length : Number(value !== defaultsFor(store)[def.field]);
 };
 
+// The panel's select with search, for a setting: the pick (a list when isMulti) lands in
+// shared(store).value, where the setting reads it back.
+/** @param {{ store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean }} params */
+const openSelect = ({ store, title, value, options, isMulti = false }) => {
+  setShared(store, { value });
+  openMenu({ store, groups: [{ title, field: "value", isMulti, options }] });
+};
+
 function openMenu(menu) {
   const groups = menu.groups ?? [];
   const groupRows = groups.reduce((sum, g) => sum + g.options.length + (groups.length > 1 ? 1 : 0), 0);
   const hasSearch = !menu.skills && !menu.isFilterList;
+  // An On-call row: its actions, then a title and Ask plus each skill.
+  const oncallRows = menu.oncall ? menu.oncall.actions.length + menu.oncall.skills.length + 2 : 0;
   const rows = menu.isFilterList
     ? groups.length + 1
-    : (menu.skills?.length ?? 0) + groupRows + (menu.links?.length ?? 0);
+    : (menu.skills?.length ?? 0) + groupRows + (menu.links?.length ?? 0) + oncallRows;
   const separators = Number(Boolean(menu.links?.length)) * MENU_SEPARATOR_HEIGHT;
   const listHeight = Math.max(1, rows) * MENU_ROW_HEIGHT + separators;
   // A ticket's menu can switch in place to "where" (title, Back, the options), so it fits both.
@@ -327,6 +348,11 @@ export default class Hub extends View {
       this.gh44Dialog = new Gh44Dialog({ cx, getSettings: readPanelSettings, patchSettings });
       return;
     }
+    if (props()?.report) {
+      this.reportView = new ReportView(props().report);
+      if (!checking()) this.reportView.load(cx, loadReport);
+      return;
+    }
     if (props()?.menu) {
       this.isMenu = true;
       this.expanded = null;
@@ -350,13 +376,16 @@ export default class Hub extends View {
       this.pinned = new Set((menu.groups ?? []).flatMap((def) => [].concat(getFilters(menu.store)[def.field]).map((v) => `${def.field}:${v}`)));
       return;
     }
-    this.selected = { github: null, linear: null };
+    // A header tab pressed (and, once moved onto another tab, dragged) and where it would land.
+    /** @type {{ tab: import("./settings.js").PanelTab, to: number | null, isMoved: boolean } | null} */
+    this.tabDrag = null;
+    this.selected = { github: null, linear: null, oncall: null };
     // The shown tab each list last followed, and a row to scroll to once it is laid out.
     this.followedTab = { github: undefined, linear: undefined };
     this.scrollToRow = { github: null, linear: null };
     // row id -> its chips line width, measured after layout.
     this.chipLineWidths = new Map();
-    this.visible = { github: [], linear: [] };
+    this.visible = { github: [], linear: [], oncall: [] };
     this.isSearchFocused = false;
     this.isShowingReviewed = false;
     this.folder = undefined;
@@ -374,11 +403,13 @@ export default class Hub extends View {
     });
     this.lastGithub = null;
     this.linearSearch = this.createSearch({ placeholder: "Search ID or title" });
+    this.oncallView = new OncallView({ hub: this });
     this.settingsView = new SettingsView({
       session, getSettings: getPanelSettings, patchSettings, saveSkills,
       onLinearKeyChange: (cx) => this.reloadLinear(cx),
       reloadRepoSkills: (cx) => loadFocusedRepo({ cx, repoId: session.repo.id, folder: session.repo.folder }),
       focusPanel: () => this.handle.focus(),
+      openSelect,
     });
     if (checking()) return;
     this.settingsView.loadSkillList(cx);
@@ -391,6 +422,13 @@ export default class Hub extends View {
         if (command === "focus") this.handle.focus();
         // `herdr-app do hub.github` / `hub.linear`: show that tab (bindable in keys.json).
         if (command === "github" || command === "linear") setShared(STORE.tab, command);
+        // `herdr-app do hub.oncall` (also a nudge toast's click): the Work panel on the On-call tab.
+        if (command === "oncall") {
+          setShared(STORE.tab, "oncall");
+          this.settingsView.close();
+          run("layout.select", { stack: "panel-body", child: "hub" });
+          run("layout.show", { id: "panel" });
+        }
         // `herdr-app do hub.settings` opens the ⚙ settings on their last section;
         // hub.settings-general / -github / -linear on that one.
         if (command === "settings") this.settingsView.open({ cx });
@@ -398,6 +436,8 @@ export default class Hub extends View {
         if (section) this.settingsView.open({ cx, section });
         // `herdr-app do hub.gh44-skills`: the gh44 skills dialog.
         if (command === "gh44-skills") openGh44Dialog();
+        // `herdr-app do hub.oncall-start` / `hub.oncall-stop`: go on or off call (bindable in keys.json).
+        if (command === "oncall-start" || command === "oncall-stop") await this.switchOncall({ isOn: command === "oncall-start" });
         if (command === "cleanup") await this.runCleanup(cx);
         if (command === "start" && pendingStart) {
           const start = pendingStart;
@@ -418,8 +458,23 @@ export default class Hub extends View {
         cx.notify();
       }
     });
+    if (!hasResumedOncall) {
+      hasResumedOncall = true;
+      cx.spawn(async () => {
+        const r = await resumeOncall();
+        if (r.status === "error") notify({ title: "Could not restart On-call", body: r.message, level: "warning" });
+      });
+    }
     cx.timer.every(TICK_MS, (cx) => this.tick(cx));
     this.tick(cx);
+  }
+
+  /** @param {{ isOn: boolean }} params */
+  async switchOncall({ isOn }) {
+    const config = await loadOncallConfig();
+    const r = isOn ? await startOncall(config) : await stopOncall(config);
+    if (r.status === "success") notify({ title: isOn ? "You are on call" : "Off call", level: "info" });
+    else notify({ title: isOn ? "Could not start On-call" : "Could not stop On-call", body: r.message, level: "warning" });
   }
 
   // One handler per event: the input may keep only one.
@@ -435,6 +490,8 @@ export default class Hub extends View {
   // Every second, no I/O unless needed: pick the cache keys for what is shown,
   // and fetch only what is missing or older than REFRESH_MS.
   tick(cx) {
+    if (this.settingsView.isOncallShown()) this.settingsView.oncall.tick(cx);
+    this.oncallView.tick({ cx, isShown: isPanelShown() && currentTab() === "oncall" && !this.settingsView.isOpen });
     const folder = currentFolder();
     const isIdStale = repoIds.get(folder) === null && Date.now() - (repoCheckedAt.get(folder) ?? 0) > ERROR_RETRY_MS;
     if (folder !== this.folder || isIdStale) {
@@ -658,9 +715,10 @@ export default class Hub extends View {
       case "k": case "up": move(-1); break;
       case "enter": row?.primary(cx); break;
       case "o": if (row) cx.open_url(row.url); break;
-      case "/": (tab === "github" ? this.githubSearch : this.linearSearch).focus(); break;
+      case "/": (tab === "github" ? this.githubSearch : tab === "linear" ? this.linearSearch : this.oncallView.search).focus(); break;
       case "1": if (getPanelSettings().shouldShowGithub) setShared(STORE.tab, "github"); break;
       case "2": if (getPanelSettings().shouldShowLinear) setShared(STORE.tab, "linear"); break;
+      case "3": if (getPanelSettings().shouldShowOncall) setShared(STORE.tab, "oncall"); break;
       default: {
         // A key for a skill the row's menu leaves out (hidden in its case, or address-review on someone else's PR) does nothing.
         const skill = row ? getKeySkills({ skills: getRowSkills(), tab, actions: row.actions })[e.key] : undefined;
@@ -1359,6 +1417,11 @@ export default class Hub extends View {
   }
 
   // The Linear tab is showing its key field: ⚙ then opens on the Linear section.
+  // The On-call rows' skills: the settings' ones that can run here.
+  getOncallSkills() {
+    return getRowSkills();
+  }
+
   isLinearKeyMissing() {
     const result = cache.get(this.linearKey)?.result;
     return currentTab() === "linear" && result?.status === "error" && result.reason === "auth";
@@ -1374,8 +1437,20 @@ export default class Hub extends View {
   }
 
   // An action row gets a leading `actionIcon`; a choice row (`isChecked` set) gets a leading checkbox.
-  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null }) {
+  // isDisabled: dimmed, not clickable and skipped by ↑/↓. isLoading: a spinner in place of the icon.
+  /**
+   * @param {{ id: string, label: string, actionIcon?: string | null, iconColor?: string | null, isChecked?: boolean | null,
+   *   onClick: (cx: import("gpui-kit").Context) => void, scroll?: { handle: any, index: number } | null, isDisabled?: boolean, isLoading?: boolean }} params
+   */
+  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null, isDisabled = false, isLoading = false }) {
     const t = theme();
+    if (isDisabled) {
+      return h_flex().id(id).h(MENU_ROW_HEIGHT).flex_none().px(9).gap(8).items_center().rounded(6).bg(t.popover).text_color(t.dim)
+        .child(isLoading
+          ? svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).spin(900)
+          : svg(icon(actionIcon ?? "x")).size(11).flex_none().text_color(t.dim))
+        .child(div().flex_1().truncate().child(label));
+    }
     const isActive = this.registerMenuItem({ onClick, scroll });
     return h_flex().id(id).h(MENU_ROW_HEIGHT).flex_none().px(9).gap(8).items_center().rounded(6).cursor_pointer()
       .bg(isActive ? t.selected : t.popover).text_color(t.foreground).hover((s) => s.bg(t.selected)).on_click((_e, cx) => onClick(cx))
@@ -1558,6 +1633,7 @@ export default class Hub extends View {
     }
     const hasSearch = !menu.skills;
     const rows = this.askSkill ? this.askRows({ skill: this.askSkill, target: menu.target })
+      : menu.oncall ? oncallMenuRows({ hub: this, menu })
       : menu.skills ? this.skillRows(menu)
       : groups.filter((def) => groups.length === 1 || def.options.some((o) => this.matchesMenuSearch(o.label))).flatMap((def) => [
         ...(groups.length > 1 ? [div().flex_none().px(9).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).child(def.title)] : []),
@@ -1572,27 +1648,93 @@ export default class Hub extends View {
 
   // ---------- panel ----------
 
-  // A main tab: icon, name and count pill, with an accent underline when shown.
-  tabButton({ id, label, iconName, count, isOn }) {
+  // A main tab: icon, name and count pill, with an accent underline when shown. Pressing and
+  // moving onto another tab drags it; the accent line shows where it lands. A plain click shows it.
+  /**
+   * @param {{ id: import("./settings.js").PanelTab, label: string, iconName: string, count: number | null, isOn: boolean,
+   *   isAlert?: boolean, index: number, order: import("./settings.js").PanelTab[] }} params
+   */
+  tabButton({ id, label, iconName, count, isOn, isAlert = false, index, order }) {
     const t = theme();
-    return v_flex().id(`tab-${id}`).h_full().px(4).cursor_pointer().on_click((_e, cx) => { this.settingsView.close(); setShared(STORE.tab, id); cx.notify(); })
+    const drag = this.tabDrag;
+    const isDragging = Boolean(drag?.isMoved);
+    const isLineBefore = isDragging && drag?.to === index;
+    const isLineAfter = isDragging && drag?.to === order.length && index === order.length - 1;
+    return v_flex().id(`tab-${id}`).relative().h_full().px(4).cursor_pointer()
+      .when(isDragging && drag?.tab === id, (el) => el.opacity(0.5))
+      .when(isLineBefore || isLineAfter, (el) => el.child(div().absolute().top(6).bottom(6).w(2).rounded(1).bg(t.accent)
+        .when(isLineBefore, (line) => line.left(-1))
+        .when(isLineAfter, (line) => line.right(-1))))
+      .on_mouse_down("left", (_e, cx) => { this.tabDrag = { tab: id, to: null, isMoved: false }; cx.notify(); })
+      .on_mouse_move((e, cx) => {
+        if (!this.tabDrag) return;
+        const to = index + Number(e.local_position.x > e.bounds.width / 2);
+        const isMoved = this.tabDrag.isMoved || this.tabDrag.tab !== id;
+        if (to === this.tabDrag.to && isMoved === this.tabDrag.isMoved) return;
+        this.tabDrag = { ...this.tabDrag, to, isMoved };
+        cx.notify();
+      })
+      .on_mouse_up("left", (_e, cx) => {
+        const done = this.tabDrag;
+        this.tabDrag = null;
+        if (done?.isMoved && done.to !== null) {
+          setShared(STORE.tabOrder, moveTab({ order, tab: done.tab, to: done.to }));
+        } else {
+          this.settingsView.close();
+          setShared(STORE.tab, id);
+        }
+        cx.notify();
+      })
       .child(h_flex().flex_1().px(8).gap(7).items_center().text_size(13.5).font_medium()
         .text_color(isOn ? t.foreground : t.muted).hover((s) => s.text_color(t.foreground))
         .child(svg(icon(iconName)).size(15))
         .child(label)
         .when(count !== null, (el) => el.child(div().px(6).rounded(8).text_size(11)
-          .bg(isOn ? t.accent : t.raised).text_color(isOn ? t.accent_foreground : t.muted).child(String(count)))))
+          .bg(isAlert ? palette(t).danger : isOn ? t.accent : t.raised).text_color(isAlert ? t.background : isOn ? t.accent_foreground : t.muted).child(String(count)))))
       .child(div().h(2).w_full().rounded(1).bg(isOn ? t.accent : t.surface));
   }
 
-  /** @param {"github" | "linear"} tab */
+  // The shown tabs in the saved order.
+  /** @param {{ tab: import("./settings.js").PanelTab, settings: import("./settings.js").Settings, countOf: (key: string) => number | null }} params */
+  headerTabs({ tab, settings, countOf }) {
+    const shown = getTabOrder(shared(STORE.tabOrder)).filter((id) => {
+      switch (id) {
+        case "github": return settings.shouldShowGithub;
+        case "linear": return settings.shouldShowLinear;
+        case "oncall": return settings.shouldShowOncall;
+        default: {
+          /** @type {never} */
+          const unknownTab = id;
+          return unknownTab;
+        }
+      }
+    });
+    /** @param {import("./settings.js").PanelTab} id */
+    const details = (id) => {
+      switch (id) {
+        case "github": return { label: "GitHub", iconName: "github", count: countOf(this.githubKey), isAlert: false };
+        case "linear": return { label: "Linear", iconName: "linear", count: countOf(this.linearKey), isAlert: false };
+        case "oncall": return { label: "On-call", iconName: "oncall", count: this.oncallView.unseenCount() || null, isAlert: true };
+        default: {
+          /** @type {never} */
+          const unknownTab = id;
+          return unknownTab;
+        }
+      }
+    };
+    return shown.map((id, index) => this.tabButton({ id, ...details(id), isOn: tab === id, index, order: shown }));
+  }
+
+  /** @param {import("./settings.js").PanelTab} tab */
   mainView(tab) {
     if (this.settingsView.isOpen) return this.settingsView.render();
+    if (tab === "oncall") return this.oncallView.render({ openSettings: (cx) => { this.settingsView.open({ cx, section: "oncall" }); cx.notify(); } });
     return tab === "github" ? this.githubView() : this.linearView();
   }
 
   render(cx) {
     if (this.gh44Dialog) return this.gh44Dialog.render();
+    if (this.reportView) return this.reportView.render();
     if (this.isMenu) return this.menuView();
     const settings = readPanelSettings();
     frame = { settings, tab: getShownTab({ saved: shared(STORE.tab), settings }) };
@@ -1624,9 +1766,10 @@ export default class Hub extends View {
     return v_flex().id("hub").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
       .text_color(t.foreground).text_size(13)
       .track_focus(this.handle).on_key_down((e, cx) => this.handleKey(e, cx))
-      .child(h_flex().flex_none().h(TAB_BAR_HEIGHT).px(GUTTER - 4).gap(2).items_end().bg(t.surface).border_b(1).border_color(t.border)
-        .when(settings.shouldShowGithub, (el) => el.child(this.tabButton({ id: "github", label: "GitHub", iconName: "github", count: countOf(this.githubKey), isOn: tab === "github" })))
-        .when(settings.shouldShowLinear, (el) => el.child(this.tabButton({ id: "linear", label: "Linear", iconName: "linear", count: countOf(this.linearKey), isOn: tab === "linear" })))
+      .child(h_flex().id("hub-tabs").flex_none().h(TAB_BAR_HEIGHT).px(GUTTER - 4).gap(2).items_end().bg(t.surface).border_b(1).border_color(t.border)
+        // Let go anywhere else in the bar: the drag ends where it was.
+        .on_mouse_up("left", (_e, cx) => { if (this.tabDrag) { this.tabDrag = null; cx.notify(); } })
+        .children(this.headerTabs({ tab, settings, countOf }))
         .child(div().flex_1())
         .child(div().id("hub-refresh").self_center().size(26).flex().items_center().justify_center().rounded(6).cursor_pointer()
           .text_color(t.muted).hover((s) => s.bg(t.hover)).tooltip("Refresh")
