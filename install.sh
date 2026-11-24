@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Sets up the Herdr app as recorded here: gh44 themes, own mods, gh44-files, the mods in mods.txt,
-# keys, settings, the gh44-herdr layout and every plugin in plugins.txt. Safe to run again.
+# keys, settings, the gh44-omnia layout and every plugin in plugins.txt. Safe to run again.
 # The Herdr app must be open.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOME="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 THEME_REPO="$HERE/../gh44-theme"
-LAYOUT=gh44-herdr
+LAYOUT=gh44-omnia
+# Names this setup had before (it was gh44-herdr): removed so they don't linger.
+FORMER_LAYOUTS="gh44-herdr"
 # Other layouts, kept beside the main one; ctrl-shift-l switches to them.
 EXTRA_LAYOUTS=""
 STAMP=$(date +%Y%m%d-%H%M%S)
@@ -28,16 +30,21 @@ place() {
   cp "$source" "$target"
 }
 
-# 1. Themes, from the gh44-theme checkout beside gh44-herdr.
+# 1. Themes, from the gh44-theme checkout beside gh44-omnia.
 if [ -d "$THEME_REPO/herdr" ]; then
   mkdir -p "$APP_HOME/themes"
   for theme in "$THEME_REPO"/herdr/*.json; do place "$theme" "$APP_HOME/themes/$(basename "$theme")"; done
   echo "themes: copied from gh44-theme"
 else
-  echo "themes: skipped, clone gh44-theme next to gh44-herdr and run this again" >&2
+  echo "themes: skipped, clone gh44-theme next to gh44-omnia and run this again" >&2
 fi
 
-# 2. Own mods, linked so edits here are live.
+# 2. Own mods, linked so edits here are live. A link left by a mod renamed or removed here goes.
+for link in "$APP_HOME"/mods/*; do
+  if [ -L "$link" ] && [ ! -e "$link" ]; then
+    case "$(readlink "$link")" in */gh44-herdr/mods/* | "$HERE"/mods/*) rm "$link" ;; esac
+  fi
+done
 for mod in "$HERE"/mods/*/; do
   mod="${mod%/}" target="$APP_HOME/mods/$(basename "$mod")"
   if [ -L "$target" ]; then
@@ -63,7 +70,7 @@ import { gh44Syntax } from "./gh44-syntax.js";' -e 's/syntax: { keyword: t.ansi5
   grep -q 'gh44Syntax(t)' "$FILES_MOD/main.js" || die "gh44-files: the files mod changed, update the patch in install.sh"
   echo "gh44-files: files panel with gh44 code colors"
 else
-  echo "gh44-files: Herdr's code colors, clone gh44-theme next to gh44-herdr for gh44 ones" >&2
+  echo "gh44-files: Herdr's code colors, clone gh44-theme next to gh44-omnia for gh44 ones" >&2
 fi
 herdr-app check "$FILES_MOD" > /dev/null || die "herdr-app check failed for gh44-files"
 
@@ -102,9 +109,10 @@ place_with_home "$HERE/settings.json" "$APP_HOME/settings.json"
 place_with_home "$HERE/layouts/$LAYOUT.json" "$APP_HOME/layouts/$LAYOUT.json"
 for extra in $EXTRA_LAYOUTS; do place_with_home "$HERE/layouts/$extra.json" "$APP_HOME/layouts/$extra.json"; done
 herdr-app do layout.switch "{\"name\":\"$LAYOUT\"}" > /dev/null
+for former in $FORMER_LAYOUTS; do rm -f "$APP_HOME/layouts/$former.json"; done
 echo "layout: $LAYOUT"
 
-# 4. Plugins. Their installers patch the layout on screen, which is now gh44-herdr.
+# 4. Plugins. Their installers patch the layout on screen, which is now gh44-omnia.
 awk '!/^[[:space:]]*#/ && NF { print $1 }' "$HERE/plugins.txt" | while read -r repo; do
   echo "plugin: $repo"
   curl -fsSL "https://raw.githubusercontent.com/$repo/main/install.sh" | sh -s -- --app

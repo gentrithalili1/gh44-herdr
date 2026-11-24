@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="docs/logo.png" alt="gh44-herdr logo" width="128">
+<img src="docs/logo.png" alt="gh44-omnia logo" width="128">
 
-# gh44-herdr
+# gh44-omnia
 
 **One window for tickets, code and the agents that work on them.**
 
-A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings and gh44 mods.
+A setup for the [Herdr app](https://herdr.dev): the `gh44-omnia` layout, keys, settings and gh44 mods.
 
 [![Herdr](https://img.shields.io/badge/Herdr-app-5b5bd6)](https://herdr.dev)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-skills-d97757)](https://claude.com/claude-code)
@@ -52,8 +52,8 @@ The **On-call** tab watches Sentry in the background and notifies you only about
 With the Herdr app open:
 
 ```sh
-git clone https://github.com/gentrithalili1/gh44-herdr.git
-cd gh44-herdr
+git clone https://github.com/gentrithalili1/gh44-omnia.git
+cd gh44-omnia
 ./install.sh
 ```
 
@@ -74,9 +74,9 @@ To remove it:
 
 | Path                         | What                                                                                  |
 | ---------------------------- | ------------------------------------------------------------------------------------- |
-| `layouts/gh44-herdr.json`    | The layout                                                                            |
+| `layouts/gh44-omnia.json`    | The layout                                                                            |
 | `keys.json`, `settings.json` | Keys and settings                                                                     |
-| `mods/`                      | gh44 mods: `hub` (work panel), `gh44-herdr-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods/`                      | gh44 mods: `hub` (work panel), `gh44-omnia-tabs` (tab bar), `auto-title` (names tabs) |
 | `mods.txt`                   | Mods without an installer, copied from GitHub                                         |
 | `plugins.txt`                | Mods with their own installer                                                         |
 | `install.sh`                 | Sets up this machine                                                                  |

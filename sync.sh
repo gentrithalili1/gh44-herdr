@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Copies the live Herdr setup into this folder: the gh44-herdr layout, keys and settings.
+# Copies the live Herdr setup into this folder: the gh44-omnia layout, keys and settings.
 # Run after any change in ~/.config/herdr-app, then commit.
 # Warns about mod folders that neither this repo nor plugins.txt knows about.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOME="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-LAYOUT=gh44-herdr
+LAYOUT=gh44-omnia
 EXTRA_LAYOUTS=""
 # Mods install.sh builds itself, so they need no recording.
 BUILT_MODS="gh44-files"

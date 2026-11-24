@@ -6,7 +6,7 @@ import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify } from "herdr";
 import { icon, palette, radioMark, stop, MONO_FONT, GUTTER } from "./ui.js";
 import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
-import { loadInstalledSkills, uninstallGh44Herdr } from "./actions.js";
+import { loadInstalledSkills, uninstallGh44Omnia } from "./actions.js";
 import { openGh44Dialog } from "./gh44-dialog.js";
 import { CaseEditor } from "./case-editor.js";
 import { OncallSettings } from "./oncall/settings.js";
@@ -53,7 +53,7 @@ const SWITCH_HEIGHT = 32;
 const UNINSTALL_CONFIRM_MS = 5_000;
 /** @type {Record<"notLinked" | "start", string>} */
 const UNINSTALL_ERRORS = {
-  notLinked: "The hub mod is not linked from gh44-herdr, so its uninstall.sh is not known.",
+  notLinked: "The hub mod is not linked from gh44-omnia, so its uninstall.sh is not known.",
   start: "uninstall.sh did not start.",
 };
 
@@ -319,7 +319,7 @@ export class SettingsView {
       .when(this.sectionId === "general", (el) => el.child(div().flex_none().px(GUTTER).pt(14).pb(14).border_t(1).border_color(t.border)
         .child(this.settingsGroup({
           title: "Uninstall",
-          description: "Removes the gh44-herdr layout, mods and themes, and puts your keys and settings back from their backup.",
+          description: "Removes the gh44-omnia layout, mods and themes, and puts your keys and settings back from their backup.",
           children: [this.uninstallButton()],
         }))));
   }
@@ -421,10 +421,10 @@ export class SettingsView {
       case "confirming":
         this.uninstall = { status: "starting" };
         cx.spawn(async (cx) => {
-          const r = await uninstallGh44Herdr();
+          const r = await uninstallGh44Omnia();
           this.uninstall = { status: "idle" };
-          if (r.status === "started") notify({ title: "Uninstalling gh44-herdr", body: "Herdr switches to its main layout.", level: "info" });
-          else notify({ title: "Could not uninstall gh44-herdr", body: r.message || UNINSTALL_ERRORS[r.reason], level: "warning" });
+          if (r.status === "started") notify({ title: "Uninstalling gh44-omnia", body: "Herdr switches to its main layout.", level: "info" });
+          else notify({ title: "Could not uninstall gh44-omnia", body: r.message || UNINSTALL_ERRORS[r.reason], level: "warning" });
           cx.notify();
         });
         break;
@@ -444,7 +444,7 @@ export class SettingsView {
     const t = theme();
     const danger = palette(t).danger;
     const status = this.uninstall.status;
-    const label = status === "confirming" ? "Click again to uninstall" : status === "starting" ? "Uninstalling…" : "Uninstall gh44-herdr";
+    const label = status === "confirming" ? "Click again to uninstall" : status === "starting" ? "Uninstalling…" : "Uninstall gh44-omnia";
     return h_flex().id("gh44-uninstall").h(28).px(12).flex_none().self_start().items_center().rounded(6).border(1).border_color(danger)
       .text_size(12).text_color(danger).font_medium()
       .when(status === "confirming", (el) => el.bg(t.hover))
