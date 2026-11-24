@@ -1,29 +1,30 @@
 <div align="center">
 
-<img src="docs/logo.png" alt="gh44-omnia logo" width="128">
+<img src="docs/logo.png" alt="gh44-omnia logo" width="180">
 
 # gh44-omnia
 
-**One window for tickets, code and the agents that work on them.**
-
-A setup for the [Herdr app](https://herdr.dev): the `gh44-omnia` layout, keys, settings and gh44 mods.
-
-[![Herdr](https://img.shields.io/badge/Herdr-app-5b5bd6)](https://herdr.dev)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-skills-d97757)](https://claude.com/claude-code)
-[![Tests](https://img.shields.io/badge/tests-node_--test-3c873a)](tests)
-
-[Features](#features) · [Install](#install) · [Screenshots](#screenshots) · [What's here](#whats-here)
-
-<img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="320">
+**Your tickets, your code and the agents that work on them, in one Herdr window.**<br>
+**Pick a ticket, start a skill, and watch the agent do it in the right worktree.**
 
 </div>
 
-## Features
+You jump between Linear, GitHub, a terminal per repo and a Claude tab per task, and you lose track of what runs where. gh44-omnia is a setup for the [Herdr app](https://herdr.dev) that puts it all in one layout. The **Work panel** lists your Linear tickets and GitHub PRs; each row starts its skill as a Claude agent in the ticket's worktree and shows how it goes. The **On-call** tab watches Sentry while you are on call and only tells you about the issues in your domain, with an AI report and a suggested fix. Repo skills, the gh44 themes and the gh44-brain skills are one click away.
 
-- **Work panel:** your Linear tickets and GitHub PRs, each with a skill that runs as an agent in the right worktree.
-- **On-call:** watches Sentry and notifies you only about issues in your domain, with an AI report and a fix.
-- **Repo skills:** a repo's own skills show up while you work in it.
-- **gh44 extras:** the gh44-brain skills and the gh44 themes, one click away.
+<table>
+  <tr>
+    <th>Work panel</th>
+    <th>On-call</th>
+    <th>Filters</th>
+    <th>Settings</th>
+  </tr>
+  <tr>
+    <td valign="top"><img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="220"></td>
+    <td valign="top"><img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="220"></td>
+    <td valign="top"><img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="220"></td>
+    <td valign="top"><img src="docs/settings-general.png" alt="General settings: tabs, gh44 theme and skills" width="220"></td>
+  </tr>
+</table>
 
 ## Work panel
 
@@ -85,14 +86,10 @@ To remove it:
 | `reload.sh`                  | Reloads the linked mods                                                               |
 | `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                              |
 
-## Screenshots
+## More screenshots
 
 <p>
-  <img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="240">
-  <img src="docs/settings-general.png" alt="General settings: tabs, gh44 theme and skills" width="240">
   <img src="docs/settings-github.png" alt="GitHub settings: skills and the default for each row" width="240">
   <img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="240">
-  <img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="240">
   <img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="240">
-  <img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
 </p>
