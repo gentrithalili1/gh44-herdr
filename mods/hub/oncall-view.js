@@ -350,11 +350,9 @@ export class OncallView {
       // All clear sits in the middle of the free space; a list scrolls from the top.
       .when(isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0)
         .on_mouse_down("left", () => this.hub.handle.focus())
-        .child(this.currentRow())
         .child(v_flex().flex_1().min_h(0).justify_center().child(this.allClear()))))
-      .when(!isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.hub.scroll)
+      .when(!isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0).pt(8).pb(4).overflow_y_scrollbar().track_scroll(this.hub.scroll)
         .on_mouse_down("left", () => this.hub.handle.focus())
-        .child(this.currentRow())
         .children(rows.length ? rows.map((r) => r.element) : [this.hub.message({ title: "Nothing here", body: hasFilters || search.trim() ? "No decisions match these filters." : "No decisions in this view yet." })])
         .when(hiddenCount > 0, (list) => list.child(this.showMoreRow(hiddenCount)))));
   }
@@ -368,15 +366,20 @@ export class OncallView {
     const isRunning = Boolean(service?.isRunning);
     const projects = `${config.projects.length} project${config.projects.length === 1 ? "" : "s"}`;
     const nextIn = service?.nextPollAt ? Date.parse(service.nextPollAt) - Date.now() : null;
+    // The issue the AI triages right now, in place of the countdown.
+    const current = isRunning && !service?.lastError ? service?.current ?? null : null;
+    const listening = `Listening to ${projects}${nextIn !== null && nextIn > 0 ? ` · next check in ${formatSpan(nextIn)}` : ""}`;
     const text = isRunning
-      ? service?.lastError ? `Last check failed: ${service.lastError.message}` : `Listening to ${projects}${nextIn !== null && nextIn > 0 ? ` · next check in ${formatSpan(nextIn)}` : ""}`
+      ? service?.lastError ? `Last check failed: ${service.lastError.message}` : current ? `Triaging ${current.shortId}: ${current.title} · ${projects}` : listening
       : config.isOn ? "On call, the service is starting…" : `Off call · ${projects} set up`;
     const dot = isRunning ? (service?.lastError ? colors.warning : colors.success) : t.dim;
     // Running and fine: a ring that drains until the next check. Else a dot in the state's color.
-    const isCountingDown = isRunning && !service?.lastError && nextIn !== null && nextIn > 0;
-    return h_flex().h(26).gap(8).items_center()
+    const isCountingDown = !current && isRunning && !service?.lastError && nextIn !== null && nextIn > 0;
+    return h_flex().id("oncall-status").h(26).gap(8).items_center()
+      .when(Boolean(current), (el) => el.tooltip(current ? `The AI is triaging ${current.shortId}: ${current.title}` : "")
+        .child(svg(SPINNER).size(12).flex_none().text_color(t.working).spin(900)))
       .when(isCountingDown, (el) => el.child(svg(icon(getCountdownIcon({ msLeft: nextIn ?? 0, periodMs: config.pollMinutes * MINUTE_MS }))).size(12).flex_none().text_color(colors.success)))
-      .when(!isCountingDown, (el) => el.child(div().size(8).flex_none().rounded(4).bg(dot)))
+      .when(!isCountingDown && !current, (el) => el.child(div().size(8).flex_none().rounded(4).bg(dot)))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(service?.lastError ? colors.warning : t.muted).child(text))
       .when(isRunning, (el) => el.child(this.smallButton({ id: "oncall-check-now", label: isChecking() ? "Checking…" : "Check now", isLoading: isChecking(), onClick: (cx) => this.handleCheckNow(cx) })))
       .when(!isRunning && !config.isOn, (el) => el.child(this.smallButton({ id: "oncall-go-on", label: state.isStarting ? "Starting…" : "Go on call", isAccent: true, onClick: (cx) => this.handleGoOnCall(cx) })));
@@ -464,16 +467,6 @@ export class OncallView {
       { title: "Seen", field: "seen", isMulti: false, options: SEEN_OPTIONS },
     ];
     return defs;
-  }
-
-  // The issue the AI looks at right now.
-  currentRow() {
-    const t = theme();
-    const current = state.service?.current;
-    if (!current) return div();
-    return h_flex().flex_none().mx(GUTTER - 4).mt(8).px(10).py(8).gap(8).items_center().rounded(6).bg(`${t.working}14`).border(1).border_color(`${t.working}40`)
-      .child(svg(SPINNER).size(12).flex_none().text_color(t.working).spin(900))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(`AI is looking at ${current.shortId}: ${current.title}`));
   }
 
   // A pulsing badge with rings going out, "All clear", and what keeps watching.
