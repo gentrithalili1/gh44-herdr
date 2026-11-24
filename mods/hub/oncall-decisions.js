@@ -156,3 +156,47 @@ const CHECK_TIMEOUT_MS = 15 * 60_000;
 /** @param {{ request: { at: number, nextPollAt: string | null } | null, nextPollAt: string | null, now: number }} params */
 export const isCheckPending = ({ request, nextPollAt, now }) =>
   Boolean(request) && nextPollAt === request?.nextPollAt && now - (request?.at ?? 0) < CHECK_TIMEOUT_MS;
+
+// A report cut into markdown and the diff blocks in it, so the tab can colour the diffs. A diff
+// fenced inside a list item is indented: the indent is taken off its lines.
+/** @typedef {"add" | "remove" | "file" | "hunk" | "context"} DiffLineKind */
+/** @typedef {{ kind: "markdown", text: string } | { kind: "diff", lines: { kind: DiffLineKind, text: string }[] }} ReportPart */
+const DIFF_FENCE = /^(\s*)```(?:diff|patch)\s*$/;
+const FENCE_END = /^\s*```\s*$/;
+
+/** @param {string} line @returns {DiffLineKind} */
+const toDiffLineKind = (line) => {
+  if (line.startsWith("+++") || line.startsWith("---")) return "file";
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "remove";
+  return "context";
+};
+
+/** @param {string} text @returns {ReportPart[]} */
+export function splitReport(text) {
+  /** @type {ReportPart[]} */
+  const parts = [];
+  /** @type {string[]} */
+  let markdown = [];
+  const flush = () => {
+    if (markdown.join("\n").trim()) parts.push({ kind: "markdown", text: markdown.join("\n") });
+    markdown = [];
+  };
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const open = lines[i].match(DIFF_FENCE);
+    const end = open ? lines.findIndex((line, j) => j > i && FENCE_END.test(line)) : -1;
+    if (!open || end === -1) {
+      markdown.push(lines[i]);
+      continue;
+    }
+    flush();
+    const indent = open[1].length;
+    const body = lines.slice(i + 1, end).map((line) => (line.slice(0, indent).trim() === "" ? line.slice(indent) : line));
+    parts.push({ kind: "diff", lines: body.map((line) => ({ kind: toDiffLineKind(line), text: line })) });
+    i = end;
+  }
+  flush();
+  return parts;
+}

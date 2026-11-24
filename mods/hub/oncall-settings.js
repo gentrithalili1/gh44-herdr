@@ -4,7 +4,7 @@ import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
 import { theme, notify, pickFolder, shared, setShared } from "herdr";
 import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./oncall-decisions.js";
-import { icon, palette, stop, MONO_FONT } from "./ui.js";
+import { icon, palette, stop, toAnchor, MONO_FONT } from "./ui.js";
 import {
   POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, SENTRY_PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
   DOMAIN_MODEL, MAX_DOMAIN_LENGTH, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, togglePick, parseEnvironments, addRule, toggleRule, removeRule,
@@ -71,7 +71,7 @@ export class OncallSettings {
    *   settingsGroup: (params: { title: string, description: string, children: any[] }) => any,
    *   settingsToggle: (params: { id: string, label: string, isOn: boolean, onToggle: (cx: import("gpui-kit").Context) => void }) => any,
    *   settingsChoice: (params: { id: string, label: string, isOn: boolean, onPick: (cx: import("gpui-kit").Context) => void }) => any,
-   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean }) => void,
+   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
    *   skillGroups: () => any[],
    * }} host
    */
@@ -130,6 +130,9 @@ export class OncallSettings {
     this.isSkillSelectOpen = false;
     // The project select stays open while you tick projects: every change is read back.
     this.isProjectSelectOpen = false;
+    // The select field pressed last: its menu opens under it.
+    /** @type {import("./ui.js").Anchor | null} */
+    this.selectAnchor = null;
     this.envInput = InputState.new({ placeholder: "production" });
     /** @type {[import("gpui-base").InputState, "environments"][]} */
     const textFields = [[this.envInput, "environments"]];
@@ -661,9 +664,10 @@ export class OncallSettings {
     const source = this.skillSource(config.triageSkill);
     return h_flex().id("oncall-triage-skill").h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.input).bg(t.background)
       .cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_mouse_down("left", (e) => { this.selectAnchor = toAnchor(e); })
       .on_click(() => {
         this.isSkillSelectOpen = true;
-        this.host.openSelect({ store: TRIAGE_SKILL_SELECT, title: "Triage skill", value: config.triageSkill, options });
+        this.host.openSelect({ store: TRIAGE_SKILL_SELECT, title: "Triage skill", value: config.triageSkill, options, anchor: this.selectAnchor });
       })
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(config.triageSkill))
       .when(source !== null, (el) => el.child(div().flex_none().text_size(11).text_color(source === "not installed" ? palette(t).warning : t.muted).child(source ?? "")))
@@ -857,10 +861,11 @@ export class OncallSettings {
     // [web, api, mobile +2 more ▾]: the Work panel's multi-select with search; picked ones list first.
     const select = h_flex().id("oncall-projects").h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.input).bg(t.background)
       .cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_mouse_down("left", (e) => { this.selectAnchor = toAnchor(e); })
       .on_click(() => {
         this.isProjectSelectOpen = true;
         this.host.openSelect({
-          store: PROJECTS_SELECT, title: "Projects", value: config.projects.map((p) => p.id), isMulti: true,
+          store: PROJECTS_SELECT, title: "Projects", value: config.projects.map((p) => p.id), isMulti: true, anchor: this.selectAnchor,
           options: projects.items.map((p) => ({ value: p.id, label: p.slug })),
         });
       })

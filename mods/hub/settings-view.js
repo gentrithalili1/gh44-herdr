@@ -77,7 +77,7 @@ export class SettingsView {
    *   onLinearKeyChange: (cx: import("gpui-kit").Context) => void,
    *   reloadRepoSkills: (cx: import("gpui-kit").Context) => void,
    *   focusPanel: () => void,
-   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean }) => void,
+   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
    * }} host
    */
   constructor({ session, getSettings, patchSettings, saveSkills, onLinearKeyChange, reloadRepoSkills, focusPanel, openSelect }) {

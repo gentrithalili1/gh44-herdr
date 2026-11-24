@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall-service/alerts.mjs";
 import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall-service/triage.mjs";
 import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall-service/repo-scan.mjs";
-import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownIcon, isCheckPending } from "../mods/hub/oncall-decisions.js";
+import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownIcon, isCheckPending, splitReport } from "../mods/hub/oncall-decisions.js";
 
 const org = { slug: "acme", name: "Acme", regionUrl: "https://de.sentry.io" };
 const web = { id: "1", slug: "web" };
@@ -357,4 +357,30 @@ test("Check now spins until the service writes a new next check time, for at mos
   assert.equal(isCheckPending({ request, nextPollAt: "2026-11-24T10:03:10Z", now }), false);
   assert.equal(isCheckPending({ request: null, nextPollAt: null, now }), false);
   assert.equal(isCheckPending({ request, nextPollAt: "2026-11-24T10:02:00Z", now: now + 16 * 60_000 }), false);
+});
+
+test("a report splits into markdown and diff blocks, an indented diff in a list included", () => {
+  const report = [
+    "## APP-1: loop",
+    "- Suggested change:",
+    "",
+    "   ```diff",
+    "   --- packages/form/useEditor.ts",
+    "   +++ packages/form/useEditor.ts",
+    "   @@ useEditor",
+    "   -  callback(html)",
+    "   +  callbackRef.current(html)",
+    "      }",
+    "   ```",
+    "   Add `useLatest` to the import.",
+  ].join("\n");
+  const parts = splitReport(report);
+  assert.deepEqual(parts.map((p) => p.kind), ["markdown", "diff", "markdown"]);
+  const diff = parts[1];
+  assert.ok(diff.kind === "diff");
+  assert.deepEqual(diff.lines.map((l) => l.kind), ["file", "file", "hunk", "remove", "add", "context"]);
+  assert.equal(diff.lines[3].text, "-  callback(html)");
+  assert.equal(diff.lines[5].text, "   }");
+  assert.deepEqual(splitReport("no code here"), [{ kind: "markdown", text: "no code here" }]);
+  assert.deepEqual(splitReport("```diff\n+ a").map((p) => p.kind), ["markdown"]);
 });

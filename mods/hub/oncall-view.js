@@ -4,11 +4,11 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, TextView } from "gpui-base";
 import { theme, shared, setShared, notify, run, closeOverlay, props, spaces } from "herdr";
-import { icon, palette, stop, GUTTER } from "./ui.js";
+import { icon, palette, stop, GUTTER, MONO_FONT } from "./ui.js";
 import { getMissingSetup } from "./oncall-config.js";
 import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "./settings.js";
 import {
-  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownIcon, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending,
+  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownIcon, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
 } from "./oncall-decisions.js";
 import {
   loadOncallConfig, loadServiceStatus, loadDecisions, hasSentryToken, touchHeartbeat, playAlertSound,
@@ -351,7 +351,7 @@ export class OncallView {
       .when(isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0)
         .on_mouse_down("left", () => this.hub.handle.focus())
         .child(v_flex().flex_1().min_h(0).justify_center().child(this.allClear()))))
-      .when(!isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0).pt(8).pb(4).overflow_y_scrollbar().track_scroll(this.hub.scroll)
+      .when(!isAllClear, (el) => el.child(v_flex().id("oncall-list").flex_1().min_h(0).pt(12).pb(4).overflow_y_scrollbar().track_scroll(this.hub.scroll)
         .on_mouse_down("left", () => this.hub.handle.focus())
         .children(rows.length ? rows.map((r) => r.element) : [this.hub.message({ title: "Nothing here", body: hasFilters || search.trim() ? "No decisions match these filters." : "No decisions in this view yet." })])
         .when(hiddenCount > 0, (list) => list.child(this.showMoreRow(hiddenCount)))));
@@ -457,7 +457,9 @@ export class OncallView {
   // The Filters menu: like the GitHub and Linear tabs', over the decisions on disk.
   /** @param {import("./oncall-decisions.js").OncallFilters} filters */
   filterDefs(filters) {
-    const projects = [...new Set([...state.decisions.map((d) => d.project), ...filters.projects].filter(Boolean))].sort();
+    // The projects picked in settings, and any older decisions came from.
+    const picked = state.config?.projects.map((p) => p.slug) ?? [];
+    const projects = [...new Set([...picked, ...state.decisions.map((d) => d.project), ...filters.projects].filter(Boolean))].sort();
     /** @type {{ title: string, field: keyof import("./oncall-decisions.js").OncallFilters, isMulti: boolean, options: { value: string, label: string }[] }[]} */
     const defs = [
       { title: "Severity", field: "severities", isMulti: true, options: SEVERITY_OPTIONS },
@@ -602,6 +604,44 @@ export class ReportView {
         .child(div().id("report-sentry").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
           .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => cx.open_url(this.report.url)).child("Open in Sentry")))
       .child(div().id("oncall-report-body").flex_1().min_h(0).overflow_y_scrollbar().px(18).py(14).text_size(13)
-        .child(this.text === null ? div().text_color(t.dim).child("Loading the report…") : TextView.markdown("oncall-report-md", this.text)));
+        .child(this.text === null ? div().text_color(t.dim).child("Loading the report…") : this.body(this.text)));
+  }
+
+  // The markdown, with each diff block drawn as a coloured diff.
+  /** @param {string} text */
+  body(text) {
+    return v_flex().gap(10).children(splitReport(text).map((part, i) => (part.kind === "markdown"
+      ? TextView.markdown(`oncall-report-md-${i}`, part.text)
+      : this.diffBlock({ id: `oncall-report-diff-${i}`, lines: part.lines }))));
+  }
+
+  // Removed lines on red, added on green, file and hunk lines dimmed; one line per row, scrolling sideways.
+  /** @param {{ id: string, lines: { kind: import("./oncall-decisions.js").DiffLineKind, text: string }[] }} params */
+  diffBlock({ id, lines }) {
+    const t = theme();
+    const colors = palette(t);
+    /** @param {import("./oncall-decisions.js").DiffLineKind} kind */
+    const look = (kind) => {
+      switch (kind) {
+        case "add": return { bg: `${colors.success}26`, color: colors.success };
+        case "remove": return { bg: `${colors.danger}26`, color: colors.danger };
+        case "file": return { bg: null, color: t.dim };
+        case "hunk": return { bg: null, color: t.muted };
+        case "context": return { bg: null, color: t.foreground };
+        default: {
+          /** @type {never} */
+          const unknownKind = kind;
+          return unknownKind;
+        }
+      }
+    };
+    return v_flex().id(id).flex_none().py(6).rounded(6).border(1).border_color(t.border).bg(t.surface).overflow_x_scrollbar()
+      .font_family(MONO_FONT).text_size(12)
+      .children(lines.map((line, i) => {
+        const { bg, color } = look(line.kind);
+        return div().id(`${id}-${i}`).flex_none().min_w_full().px(12).py(1).whitespace_nowrap().text_color(color)
+          .when(Boolean(bg), (el) => el.bg(bg ?? ""))
+          .child(line.text || " ");
+      }));
   }
 }

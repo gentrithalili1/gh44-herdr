@@ -53,8 +53,10 @@ The service that runs you gives you the issue data, the stack, the engineer's do
    **Owner:** <team or area> (<path> per CODEOWNERS, if any). "Yours, handle it.", "Not yours. Hand it to <team>." or why it's unclear.
 
    **Fix / next step:**
-   - A bug in the code: file, function and line if known, the root cause in one sentence, and the change as a unified diff with the file path.
-   - Otherwise: 1-3 next steps (mute and why, monitor, hand over, ask backend).
+   - The cause in one sentence, with file, function and line. Say "Likely cause, not confirmed." when you inferred it.
+   - Whenever the cause is in code you can read, the suggested change as a fenced `diff` block, even when another team owns it: they get a head start. Use the file path in the `---`/`+++` lines and the function in the `@@` line, and keep it to the lines that change.
+   - Then 1-3 next steps (hand over, confirm in a test or replay, monitor, mute and why).
+   - Leave the diff out only when nothing in the code should change: noise, a backend or config problem, or no stack to go on.
    ```
 
    Use backticks for every file path, symbol, query or field name.

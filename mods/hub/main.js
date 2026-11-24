@@ -15,7 +15,7 @@ import {
   loadWorktrees, loadMergedWorktrees, removeWorktree,
 } from "./github.js";
 import { loadIssues, loadLinearMeta } from "./linear.js";
-import { icon, palette, stop, MONO_FONT, GUTTER } from "./ui.js";
+import { icon, palette, stop, toAnchor, MONO_FONT, GUTTER } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
@@ -284,13 +284,40 @@ const countPicked = ({ store, def }) => {
 
 // The panel's select with search, for a setting: the pick (a list when isMulti) lands in
 // shared(store).value, where the setting reads it back.
-/** @param {{ store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean }} params */
-const openSelect = ({ store, title, value, options, isMulti = false }) => {
+/**
+ * @param {{ store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean,
+ *   anchor?: import("./ui.js").Anchor | null }} params
+ */
+const openSelect = ({ store, title, value, options, isMulti = false, anchor = null }) => {
   setShared(store, { value });
-  openMenu({ store, groups: [{ title, field: "value", isMulti, options }] });
+  openMenu({ store, groups: [{ title, field: "value", isMulti, options }], anchor, align: "left" });
+};
+
+// Menus open MENU_GAP below the button pressed to open them: its left edge (align "left") or its
+// right edge (align "right", for buttons at the panel's right side). Without a box: at the pointer.
+const MENU_GAP = 5;
+// The menu button pressed last, kept from its mouse down for the click that opens the menu. A
+// press with no menu after it (or a menu opened from the keyboard later) goes stale.
+const PRESS_FRESH_MS = 1_000;
+/** @type {{ anchor: import("./ui.js").Anchor | null, at: number } | null} */
+let pressed = null;
+/** @param {import("gpui-kit").MouseButtonEvent} e @param {import("gpui-kit").Context} cx */
+const pressMenuButton = (e, cx) => {
+  pressed = { anchor: toAnchor(e), at: Date.now() };
+  cx.stop_propagation();
+};
+/** @param {{ anchor: import("./ui.js").Anchor | null, align: "left" | "right", width: number }} params @returns {{ x: number, y: number } | "pointer"} */
+const menuSpot = ({ anchor, align, width }) => {
+  if (!anchor) return "pointer";
+  const x = align === "right" ? anchor.left + anchor.width - width : anchor.left;
+  return { x: Math.max(0, x), y: anchor.top + anchor.height + MENU_GAP };
 };
 
 function openMenu(menu) {
+  // The box it opens under: its own (a reopened menu keeps it), else the button just pressed.
+  const anchor = menu.anchor ?? (pressed && Date.now() - pressed.at < PRESS_FRESH_MS ? pressed.anchor : null);
+  pressed = null;
+  const align = menu.align ?? "right";
   const groups = menu.groups ?? [];
   const groupRows = groups.reduce((sum, g) => sum + g.options.length + (groups.length > 1 ? 1 : 0), 0);
   const hasSearch = !menu.skills && !menu.isFilterList;
@@ -305,10 +332,13 @@ function openMenu(menu) {
   const askHeight = menu.isTicket ? MENU_TITLE_HEIGHT + (WHERE_OPTIONS.length + 1) * MENU_ROW_HEIGHT + MENU_SEPARATOR_HEIGHT : 0;
   const height = Math.min(MENU_MAX_HEIGHT, Math.max(listHeight, askHeight) + MENU_PADDING + (hasSearch ? MENU_SEARCH_HEIGHT : 0));
   if (menu.isFilterList) {
-    openOverlay({ mod: "hub", kind: "popup", frame: "none", width: FILTER_POPOVER_WIDTH, height: FILTER_POPOVER_HEIGHT, props: { menu } });
+    openOverlay({
+      mod: "hub", kind: "popup", frame: "none", width: FILTER_POPOVER_WIDTH, height: FILTER_POPOVER_HEIGHT,
+      at: menuSpot({ anchor, align, width: FILTER_POPOVER_WIDTH }), props: { menu: { ...menu, anchor } },
+    });
     return;
   }
-  openOverlay({ mod: "hub", kind: "popup", width: MENU_WIDTH, height, props: { menu: { ...menu, height } } });
+  openOverlay({ mod: "hub", kind: "popup", width: MENU_WIDTH, height, at: menuSpot({ anchor, align, width: MENU_WIDTH }), props: { menu: { ...menu, anchor, height } } });
 }
 
 // Where a ticket's run goes: its worktree when it has one, else what "Where runs go" says
@@ -746,7 +776,8 @@ export default class Hub extends View {
     return h_flex().h(30).items_center().rounded(6).border(1).border_color(this.isSearchFocused ? t.accent : t.input).bg(t.background).overflow_hidden()
       .child(h_flex().id(`scope-${scopeDef.field}`).h_full().px(8).gap(4).items_center().flex_none().cursor_pointer()
         .text_size(12).text_color(t.foreground).bg(t.raised).hover((s) => s.bg(t.hover))
-        .on_click(() => openMenu({ store, groups: [scopeDef] }))
+        .on_mouse_down("left", pressMenuButton)
+        .on_click(() => openMenu({ store, groups: [scopeDef], align: "left" }))
         .child(label).child(svg(icon("chevron")).size(12).text_color(t.muted)))
       .child(div().w(1).h_full().bg(t.border))
       .child(h_flex().flex_1().min_w(0).px(8).gap(6).items_center()
@@ -779,7 +810,8 @@ export default class Hub extends View {
     const isOn = count > 0;
     return h_flex().id(`filters-${store}`).h_full().px(8).gap(5).items_center().flex_none().cursor_pointer().text_size(12)
       .text_color(isOn ? t.foreground : t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
-      .on_click(() => openMenu({ store, groups: defs, isFilterList: true }))
+      .on_mouse_down("left", pressMenuButton)
+      .on_click(() => openMenu({ store, groups: defs, isFilterList: true, align: "right" }))
       .child(svg(icon("filter")).size(13))
       .child("Filters")
       .when(isOn, (el) => el.child(div().px(5).rounded(8).bg(t.accent).text_color(t.accent_foreground).text_size(10.5).child(String(count))));
@@ -809,14 +841,14 @@ export default class Hub extends View {
     return h_flex().id(id).h(24).flex_none().items_center().rounded(6).border(1).border_color(t.border).bg(t.background).text_size(12)
       .child(h_flex().id(`${id}-run`).h_full().pl(7).pr(8).gap(5).items_center().rounded_l(6).cursor_pointer()
         .text_color(t.foreground).hover((s) => s.bg(hoverBg)).tooltip(primary.tip)
-        .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); primary.run(cx); })
+        .on_mouse_down("left", pressMenuButton).on_click((_e, cx) => { cx.stop_propagation(); primary.run(cx); })
         .child(this.primaryMark(primary))
         .child(primary.label)
         .when(Boolean(primary.worktreeBadge), (el) => el.child(div().px(4).rounded(4).bg(t.selected).text_color(t.accent).text_size(10.5).child(primary.worktreeBadge))))
       .child(div().w(1).h(14).bg(t.border))
       .child(div().id(`${id}-more`).h_full().px(5).flex().items_center().rounded_r(6).cursor_pointer()
         .text_color(t.muted).hover((s) => s.bg(hoverBg).text_color(t.foreground))
-        .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); openMenu(menu); })
+        .on_mouse_down("left", pressMenuButton).on_click((_e, cx) => { cx.stop_propagation(); openMenu(menu); })
         .child(svg(icon("chevron")).size(12)));
   }
 

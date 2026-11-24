@@ -100,7 +100,7 @@ Does it match:
 
 Severity is one of: critical, high, medium, low, ignore.
 
-Write a short markdown report, then end with exactly one verdict line, nothing after it. Use this format even when the guide asks for another:
+Write the markdown report the guide asks for, with a fenced diff block for a suggested code change when there is one. Then end with exactly one verdict line, nothing after it. Use this format even when the guide asks for another:
 ${VERDICT_MARKER} {"severity":"<critical|high|medium|low|ignore>","matches":<true|false>,"owner":"<mine|other|unclear: whose code broke, by the domain>","rule":"<the matching rule's text, or empty>","summary":"<one sentence for a notification>"}`;
 
 /** @param {EventContext | null} context */

@@ -21,3 +21,11 @@ export const radioMark = ({ t, isOn }) => div().size(14).flex_none().flex().item
 
 /** @param {unknown} _e @param {import("gpui-kit").Context} cx */
 export const stop = (_e, cx) => cx.stop_propagation();
+
+// A pressed element's box in the window, from a mouse down: where a menu opened from it goes.
+// null before the element is painted.
+/** @typedef {{ left: number, top: number, width: number, height: number }} Anchor */
+/** @param {import("gpui-kit").MouseButtonEvent} e @returns {Anchor | null} */
+export const toAnchor = (e) => (e.local_position && e.bounds
+  ? { left: e.position.x - e.local_position.x, top: e.position.y - e.local_position.y, width: e.bounds.width, height: e.bounds.height }
+  : null);
