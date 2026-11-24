@@ -1,5 +1,5 @@
-// On-call I/O for the panel: the saved setup, the Sentry token and starting or stopping the
-// background service under herdr-core. The service (oncall/service/main.mjs) does the Sentry calls;
+// On-call I/O for the panel: the saved setup, the tracker token and starting or stopping the
+// background service under herdr-core. The service (oncall/service/main.mjs) calls the tracker;
 // the panel runs it for one-off answers (orgs, projects) and reads the files it writes.
 // The token sits in a file only the user can read, like the Linear key.
 import { exec, hc, run, appHome, readTextFile, writeTextFile, spaces } from "herdr";
@@ -8,7 +8,9 @@ import { readDecisions } from "./decisions.js";
 
 const getDataFolder = () => `${appHome()}/hub`;
 const getOncallFolder = () => `${getDataFolder()}/oncall`;
-const getTokenFile = () => `${getDataFolder()}/sentry-token`;
+// One token per tracker: <provider>-token.
+/** @param {import("./providers/catalog.js").ProviderId} provider */
+const getTokenFile = (provider) => `${getDataFolder()}/${provider}-token`;
 const getConfigFile = () => `${getOncallFolder()}/config.json`;
 const getStatusFile = () => `${getOncallFolder()}/status.json`;
 const getDecisionsFile = () => `${getOncallFolder()}/decisions.json`;
@@ -20,7 +22,7 @@ const SERVICE_TIMEOUT_MS = 120_000;
 // The repo scan reads the repo with the AI: give it longer.
 const SCAN_TIMEOUT_MS = 600_000;
 // Asked of the login shell when Herdr's own PATH has no node (fnm, nvm, asdf set it up there).
-// The service shares oncall-config.js with the panel, a .js file Node reads as ES module with a warning.
+// The service shares config.js with the panel, a .js file Node reads as ES module with a warning.
 const NODE_FLAGS = ["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON"];
 // The login shell's answer, for a program Herdr's own PATH lacks (fnm, nvm, asdf set PATH up there).
 const FROM_LOGIN_SHELL = 'exec "${SHELL:-/bin/zsh}" -lic "$0" 2>/dev/null';
@@ -71,7 +73,7 @@ export async function saveOncallConfig(config) {
   }
 }
 
-export const hasSentryToken = async () => Boolean((await readTextFile(getTokenFile()))?.trim());
+export const hasTrackerToken = async () => Boolean((await readTextFile(getTokenFile((await loadOncallConfig()).provider)))?.trim());
 
 // A program's absolute path: the saved one while it still runs, else Herdr's PATH, else the login shell's.
 /** @param {{ saved: string | null, probe: string[] }} params @returns {Promise<string | null>} */
@@ -103,12 +105,14 @@ async function runServiceCommand({ args, config, timeout = SERVICE_TIMEOUT_MS })
   return parseJson(lastLine(r.stdout)) ?? { status: "error", reason: "failed", message: lastLine(r.stderr) || `The service exited with ${r.code}` };
 }
 
-// Checks the token with Sentry first and keeps it only when Sentry accepts it.
-/** @param {string} token @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").SentryOrg[] }>} */
-export async function saveSentryToken(token) {
+// Checks the token with the tracker first and keeps it only when the tracker accepts it.
+/** @param {string} token @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").Org[] }>} */
+export async function saveTrackerToken(token) {
   const value = token.trim();
   if (!/^\S+$/.test(value)) return { status: "error", reason: "failed", message: "Paste the token as one word, without spaces" };
-  const pending = `${getTokenFile()}.${Date.now()}-${Math.random().toString(36).slice(2)}.pending`;
+  const config = await loadOncallConfig();
+  const tokenFile = getTokenFile(config.provider);
+  const pending = `${tokenFile}.${Date.now()}-${Math.random().toString(36).slice(2)}.pending`;
   /** @param {OncallError} failure */
   const fail = async (failure) => {
     await exec("rm", ["-f", pending]);
@@ -120,9 +124,9 @@ export async function saveSentryToken(token) {
     await writeTextFile(pending, `${value}\n`, null);
     const locked = await exec("chmod", ["600", pending]);
     if (locked.code !== 0) return await fail({ status: "error", reason: "failed", message: locked.stderr.trim() });
-    const r = await runServiceCommand({ args: ["orgs", "--token-file", pending], config: await loadOncallConfig() });
+    const r = await runServiceCommand({ args: ["orgs", "--provider", config.provider, "--token-file", pending], config });
     if (r.status !== "success") return await fail(r);
-    const moved = await exec("mv", ["-f", pending, getTokenFile()]);
+    const moved = await exec("mv", ["-f", pending, tokenFile]);
     if (moved.code !== 0) return await fail({ status: "error", reason: "failed", message: moved.stderr.trim() });
     return r;
   } catch (error) {
@@ -131,20 +135,20 @@ export async function saveSentryToken(token) {
 }
 
 /** @returns {Promise<OncallError | { status: "success" }>} */
-export async function removeSentryToken() {
-  const r = await exec("rm", ["-f", getTokenFile()]);
+export async function removeTrackerToken() {
+  const r = await exec("rm", ["-f", getTokenFile((await loadOncallConfig()).provider)]);
   return r.code === 0 ? { status: "success" } : { status: "error", reason: "failed", message: r.stderr.trim() };
 }
 
 // Who the saved token is and its orgs.
-/** @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").SentryOrg[] }>} */
-export async function loadSentryAccount() {
-  if (!(await hasSentryToken())) return { status: "error", reason: "auth" };
+/** @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").Org[] }>} */
+export async function loadTrackerAccount() {
+  if (!(await hasTrackerToken())) return { status: "error", reason: "auth" };
   return runServiceCommand({ args: ["orgs"], config: await loadOncallConfig() });
 }
 
-/** @returns {Promise<OncallError | { status: "success", projects: import("./config.js").SentryProject[] }>} */
-export async function loadSentryProjects() {
+/** @returns {Promise<OncallError | { status: "success", projects: import("./config.js").Project[] }>} */
+export async function loadTrackerProjects() {
   return runServiceCommand({ args: ["projects"], config: await loadOncallConfig() });
 }
 
@@ -200,7 +204,7 @@ export async function stopOncall(config) {
 /** @returns {Promise<OncallError | { status: "success" | "skipped" }>} */
 export async function resumeOncall() {
   const config = await loadOncallConfig();
-  if (!config.isOn || !config.org || config.projects.length === 0 || !(await hasSentryToken())) return { status: "skipped" };
+  if (!config.isOn || !config.org || config.projects.length === 0 || !(await hasTrackerToken())) return { status: "skipped" };
   if (await isServiceLive()) return { status: "skipped" };
   const r = await startOncall(config);
   return r.status === "success" ? { status: "success" } : r;
@@ -228,8 +232,8 @@ export const touchHeartbeat = () => exec("sh", ["-c", 'mkdir -p "$0" && touch "$
 export const playAlertSound = () => exec("afplay", [ALERT_SOUND]);
 
 // The AI's report as a markdown tab of its own.
-/** @param {import("./decisions.js").Decision} decision */
-export function openReport(decision) {
+/** @param {{ decision: import("./decisions.js").Decision, trackerName: string }} params */
+export function openReport({ decision, trackerName }) {
   if (!decision.reportPath) return false;
   // In its own tab; a report already open in the shown space is switched to instead.
   const name = `${decision.shortId} report`;
@@ -239,7 +243,7 @@ export function openReport(decision) {
     run("tab.select", { id: open.id });
     return true;
   }
-  run("tab.new", { name, mod: "hub", props: { report: { path: decision.reportPath, title: name, url: decision.url } }, ...(space ? { space: space.id } : {}) });
+  run("tab.new", { name, mod: "hub", props: { report: { path: decision.reportPath, title: name, url: decision.url, trackerName } }, ...(space ? { space: space.id } : {}) });
   return true;
 }
 
@@ -271,7 +275,7 @@ export async function testDomain() {
   return runServiceCommand({ args: ["domain-test"], config });
 }
 
-// The setup scan of the saved repo folder: CODEOWNERS, the Sentry noise rules and an AI summary.
+// The setup scan of the saved repo folder: CODEOWNERS, the SDK's noise rules and an AI summary.
 /** @returns {Promise<OncallError | { status: "success", profile: import("./config.js").RepoProfile }>} */
 export async function scanRepo() {
   const config = await loadOncallConfig();

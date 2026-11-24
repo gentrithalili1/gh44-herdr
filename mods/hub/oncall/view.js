@@ -6,12 +6,13 @@ import { h_flex, v_flex, InputState, Input, TextView } from "gpui-base";
 import { theme, shared, setShared, notify, run, closeOverlay, props, spaces } from "herdr";
 import { icon, palette, stop, GUTTER, MONO_FONT } from "../ui.js";
 import { getMissingSetup } from "./config.js";
+import { getProvider } from "./providers/catalog.js";
 import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "../settings.js";
 import {
   ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
 } from "./decisions.js";
 import {
-  loadOncallConfig, loadServiceStatus, loadDecisions, hasSentryToken, touchHeartbeat, playAlertSound,
+  loadOncallConfig, loadServiceStatus, loadDecisions, hasTrackerToken, touchHeartbeat, playAlertSound,
   requestCheckNow, requestRerun, openReport, continueInClaude, startOncall,
 } from "./client.js";
 
@@ -118,8 +119,9 @@ const getOncallFilters = () => {
   };
 };
 
-/** @typedef {"report" | "claude" | "seen" | "unseen" | "rerun" | "sentry"} OncallActionId */
-/** @typedef {{ claudePath: string | null, codeFolder: string | null }} RunConfig */
+/** @typedef {"report" | "claude" | "seen" | "unseen" | "rerun" | "tracker"} OncallActionId */
+// trackerName: the issue tracker the row came from, for "Open in Sentry" and the prompts.
+/** @typedef {{ claudePath: string | null, codeFolder: string | null, trackerName: string }} RunConfig */
 // What every row of one render reads.
 /** @typedef {{ rowSkills: import("../settings.js").Skills, rerunning: Record<string, string>, runConfig: RunConfig, currentShortId: string | null, now: number }} RowContext */
 // Rows drawn at first and added by each "Show more".
@@ -127,19 +129,19 @@ const ROW_PAGE = 50;
 /** @typedef {{ decision: Decision, config: RunConfig, actions: { id: OncallActionId, label: string, icon: string }[], skills: string[] }} OncallMenu */
 const ASK = ASK_ACTION;
 
-/** @param {{ decision: Decision, isSeen: boolean }} params @returns {{ id: OncallActionId, label: string, icon: string }[]} */
-export function getOncallActions({ decision, isSeen }) {
+/** @param {{ decision: Decision, isSeen: boolean, trackerName: string }} params @returns {{ id: OncallActionId, label: string, icon: string }[]} */
+export function getOncallActions({ decision, isSeen, trackerName }) {
   /** @type {{ id: OncallActionId, label: string, icon: string }[]} */
   const actions = [];
   if (decision.reportPath) actions.push({ id: "report", label: "View report", icon: "resume" });
   if (needsAttention(decision)) actions.push(isSeen ? { id: "unseen", label: "Mark as unseen", icon: "check" } : { id: "seen", label: "Mark as seen", icon: "check" });
-  actions.push({ id: "rerun", label: "Re-run triage", icon: "refresh" }, { id: "sentry", label: "Open in Sentry", icon: "oncall" });
+  actions.push({ id: "rerun", label: "Re-run triage", icon: "refresh" }, { id: "tracker", label: `Open in ${trackerName}`, icon: "oncall" });
   return actions;
 }
 
 // What a skill or Ask gets: the issue, and the AI's report when there is one.
-/** @param {Decision} d */
-const describeIssue = (d) => `Sentry issue ${d.shortId} (${d.title}): ${d.url}${d.reportPath ? `. The on-call triage report is at ${d.reportPath}` : ""}`;
+/** @param {{ decision: Decision, trackerName: string }} params */
+const describeIssue = ({ decision: d, trackerName }) => `${trackerName} issue ${d.shortId} (${d.title}): ${d.url}${d.reportPath ? `. The on-call triage report is at ${d.reportPath}` : ""}`;
 
 // A skill (or Ask) on an issue, in a new Claude tab in the code folder (else where Herdr starts tabs).
 /** @param {{ skill: string, decision: Decision, config: RunConfig }} params */
@@ -150,8 +152,8 @@ export function runSkillOnIssue({ skill, decision, config }) {
     return;
   }
   const prompt = skill === ASK
-    ? `Read ${describeIssue(decision)}. Then wait for my questions. Change no code.`
-    : `/${skill} ${describeIssue(decision)}`;
+    ? `Read ${describeIssue({ decision, trackerName: config.trackerName })}. Then wait for my questions. Change no code.`
+    : `/${skill} ${describeIssue({ decision, trackerName: config.trackerName })}`;
   const name = `${decision.shortId} ${skill === ASK ? "ask" : skill.replace(/^gh44-/, "")}`;
   const space = spaces().find((sp) => sp.active)?.id;
   run("tab.new", { name, argv: [config.claudePath ?? "claude", prompt], ...(space ? { space } : {}), ...(config.codeFolder ? { folder: config.codeFolder } : {}) });
@@ -163,7 +165,7 @@ export function runSkillOnIssue({ skill, decision, config }) {
 export async function runOncallAction({ cx, action, decision, config }) {
   switch (action) {
     case "report":
-      if (openReport(decision)) markSeen([decision]);
+      if (openReport({ decision, trackerName: config.trackerName })) markSeen([decision]);
       else notify({ title: `${decision.shortId} has no report`, body: "Only issues the AI looked at have one. Re-run the triage to make one.", level: "info" });
       return;
     case "claude":
@@ -182,7 +184,7 @@ export async function runOncallAction({ cx, action, decision, config }) {
       else notify({ title: "Could not ask for a re-run", body: r.message, level: "warning" });
       return;
     }
-    case "sentry":
+    case "tracker":
       cx.open_url(decision.url);
       return;
     default: {
@@ -265,7 +267,7 @@ export class OncallView {
   }
 
   async read() {
-    const [config, hasToken, service, decisions] = await Promise.all([loadOncallConfig(), hasSentryToken(), loadServiceStatus(), loadDecisions()]);
+    const [config, hasToken, service, decisions] = await Promise.all([loadOncallConfig(), hasTrackerToken(), loadServiceStatus(), loadDecisions()]);
     Object.assign(state, { config, hasToken, service, decisions });
     this.toastNewNudges();
   }
@@ -309,7 +311,7 @@ export class OncallView {
     if (missing) {
       return this.hero({
         tone: "neutral", iconName: "oncall", title: "Set up On-call",
-        body: "Connect Sentry, pick your projects and tell the AI what matters to you. It checks in the background and nudges you only for that.",
+        body: `Connect ${getProvider(config.provider).name}, pick your projects and tell the AI what matters to you. It checks in the background and notifies you only for that.`,
         action: { label: "Open settings", onClick: openSettings },
       });
     }
@@ -336,7 +338,7 @@ export class OncallView {
     const context = {
       rowSkills: this.hub.getOncallSkills(),
       rerunning: getRerunning(),
-      runConfig: { claudePath: config.claudePath ?? null, codeFolder: config.codeFolder ?? null },
+      runConfig: { claudePath: config.claudePath ?? null, codeFolder: config.codeFolder ?? null, trackerName: getProvider(config.provider).name },
       currentShortId: state.service?.current?.shortId ?? null,
       now: Date.now(),
     };
@@ -517,7 +519,7 @@ export class OncallView {
     const d = decision;
     const look = d.outcome === "reported" ? SEVERITY_LOOK[d.severity ?? "low"] : d.outcome === "failed" ? { icon: "ci-failing", tone: "danger" } : { icon: "ci-none", tone: "quiet" };
     const isUnseen = needsAttention(d) && !isSeen;
-    const actions = getOncallActions({ decision: d, isSeen });
+    const actions = getOncallActions({ decision: d, isSeen, trackerName: context.runConfig.trackerName });
     const { runConfig, rowSkills } = context;
     const age = formatSpan(context.now - Date.parse(d.decidedAt));
     const situation = getOncallSituation(d);
@@ -525,8 +527,8 @@ export class OncallView {
     const defaultSkill = getDefaultSkill({ skills: rowSkills, tab: "oncall", situation });
     /** @param {string} skill */
     const start = (skill) => runSkillOnIssue({ skill, decision: d, config: runConfig });
-    // No default skill: the button opens the report, else Sentry.
-    const openAction = d.reportPath ? "report" : "sentry";
+    // No default skill: the button opens the report, else the issue in its tracker.
+    const openAction = d.reportPath ? "report" : "tracker";
     const primary = defaultSkill && skills.includes(defaultSkill)
       ? {
         label: shortSkill(defaultSkill), icon: "play",
@@ -535,8 +537,8 @@ export class OncallView {
         run: (_cx) => start(defaultSkill),
       }
       : {
-        label: openAction, icon: openAction === "report" ? "resume" : "oncall",
-        tip: openAction === "report" ? "Open the AI's report beside your terminal" : "Open in Sentry",
+        label: openAction === "report" ? "report" : "open", icon: openAction === "report" ? "resume" : "oncall",
+        tip: openAction === "report" ? "Open the AI's report beside your terminal" : `Open in ${runConfig.trackerName}`,
         /** @param {import("gpui-kit").Context} cx */
         run: (cx) => { cx.spawn(async (cx) => { await runOncallAction({ cx, action: openAction, decision: d, config: runConfig }); cx.notify(); }); },
       };
@@ -555,7 +557,7 @@ export class OncallView {
       status: { icon: look.icon, color: colors[look.tone], tip: d.severity ? `${d.severity} · ${OUTCOME_TIP[d.outcome]}` : OUTCOME_TIP[d.outcome] },
       chips: [
         ...(isUnseen ? [{ id: `${id}-new`, label: "new", tone: "danger" }] : []),
-        { id: `${id}-ref`, label: d.shortId, iconName: "oncall", tone: "quiet", isMono: true, url: d.url, tip: "Open in Sentry" },
+        { id: `${id}-ref`, label: d.shortId, iconName: "oncall", tone: "quiet", isMono: true, url: d.url, tip: `Open in ${runConfig.trackerName}` },
         { id: `${id}-decided`, label: decidedBy, tone: "neutral", tip: `Decided by ${decidedBy}: ${d.summary}` },
         ...(d.project ? [{ id: `${id}-project`, label: d.project, tone: "neutral" }] : []),
         ...(d.kind === "regressed" || d.kind === "escalating" ? [{ id: `${id}-kind`, label: d.kind, tone: "warning" }] : []),
@@ -583,9 +585,9 @@ export class OncallView {
   }
 }
 
-// The report pane (`pane.split` with props.report): the AI's markdown, with Sentry one click away.
+// The report tab (props.report): the AI's markdown, with the issue's tracker one click away.
 export class ReportView {
-  /** @param {{ path: string, title: string, url: string }} report */
+  /** @param {{ path: string, title: string, url: string, trackerName?: string }} report */
   constructor(report) {
     this.report = report;
     /** @type {string | null} */
@@ -606,8 +608,8 @@ export class ReportView {
       .child(h_flex().flex_none().h(36).px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .child(svg(icon("oncall")).size(14).text_color(t.accent))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).font_medium().child(this.report.title))
-        .child(div().id("report-sentry").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
-          .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => cx.open_url(this.report.url)).child("Open in Sentry")))
+        .child(div().id("report-tracker").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
+          .cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => cx.open_url(this.report.url)).child(`Open in ${this.report.trackerName ?? "tracker"}`)))
       .child(div().id("oncall-report-body").flex_1().min_h(0).overflow_y_scrollbar().px(18).py(14).text_size(13)
         .child(this.text === null ? div().text_color(t.dim).child("Loading the report…") : this.body(this.text)));
   }

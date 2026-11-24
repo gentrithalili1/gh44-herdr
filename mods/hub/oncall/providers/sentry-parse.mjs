@@ -1,22 +1,19 @@
-// Sentry issues and events as On-call alerts, and the query that lists them. Pure, so tests/ can load it.
+// Sentry's answers as On-call alerts, orgs and projects, and the query that lists issues.
+// Pure, so tests/ can load it; providers/sentry.mjs makes the calls.
 
 // Errors only: Sentry also files metric alerts, performance and uptime issues with level:error.
 const ISSUE_QUERY = "is:unresolved issue.category:error";
 const ISSUE_LIMIT = "100";
+// Org lists and the user live here; each org's own API is on its region host.
+export const SENTRY_URL = "https://sentry.io";
 const MAX_FRAMES = 12;
 // Tags that help the AI tell where and for whom it broke.
 const PROMPT_TAGS = ["url", "transaction", "browser", "os", "release", "environment", "lang"];
 
-/** @typedef {"new" | "regressed" | "escalating" | "ongoing" | "other"} AlertKind */
-/**
- * @typedef {{
- *   id: string, shortId: string, title: string, culprit: string, level: string, priority: string | null,
- *   project: string, url: string, kind: AlertKind, firstSeen: string, lastSeen: string,
- *   count: number, userCount: number, isUnhandled: boolean,
- * }} Alert
- */
-/** @typedef {{ fn: string, file: string, line: number | null, isInApp: boolean }} Frame */
-/** @typedef {{ message: string, frames: Frame[], tags: Record<string, string> }} EventContext */
+/** @typedef {import("./contract.js").Alert} Alert */
+/** @typedef {import("./contract.js").AlertKind} AlertKind */
+/** @typedef {import("./contract.js").EventContext} EventContext */
+/** @typedef {import("../config.js").Org} Org */
 
 /** @param {unknown} value @returns {Record<string, any>} */
 const toRecord = (value) => (value && typeof value === "object" && !Array.isArray(value) ? /** @type {Record<string, any>} */ (value) : {});
@@ -89,13 +86,13 @@ export function toEventContext(raw) {
 const isFilled = (value) => value !== null && value !== undefined && value !== "";
 
 // Orgs from Sentry's organizations list, with the region host their API lives on.
-/** @param {unknown} body @returns {{ slug: string, name: string, regionUrl: string }[]} */
+/** @param {unknown} body @returns {Org[]} */
 export function toOrgs(body) {
   if (!Array.isArray(body)) return [];
   return body.map(toRecord).filter((o) => toText(o.slug)).map((o) => ({
     slug: o.slug,
     name: toText(o.name) || o.slug,
-    regionUrl: toText(toRecord(o.links).regionUrl) || "https://sentry.io",
+    apiUrl: toText(toRecord(o.links).regionUrl) || SENTRY_URL,
   })).sort((a, b) => a.name.localeCompare(b.name));
 }
 

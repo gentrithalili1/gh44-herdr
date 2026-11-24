@@ -1,18 +1,18 @@
 ---
 name: oncall-triage
-description: Triage one Sentry issue for an on-call engineer. Finds the real code path, the owner and the severity, and writes a short report with the fix. The On-call service of gh44-herdr runs it by default; anyone can read it for the same triage by hand.
+description: Triage one issue from an error tracker (Sentry or similar) for an on-call engineer. Finds the real code path, the owner and the severity, and writes a short report with the fix. The On-call service of gh44-herdr runs it by default; anyone can use it for the same triage by hand.
 ---
 
 # On-call triage
 
-Answer one question for one Sentry issue: **does the on-call engineer need to act on it now?**
+Answer one question for one error-tracker issue: **does the on-call engineer need to act on it now?**
 
 The service that runs you gives you the issue data, the stack, the engineer's domain and rules, and the answer format. Treat the data as a starting point, not as the truth.
 
 ## Rules
 
-- You run unattended. Read only: never change anything in Sentry (no resolve, archive, assign, comment or autofix), never post anywhere, never edit files.
-- If you run inside a code folder, read it. If the Sentry tools are available, use them; if not, work from the data given and say so in the report.
+- You run unattended. Read only: never change anything in the tracker (no resolve, archive, assign, comment or autofix), never post anywhere, never edit files.
+- If you run inside a code folder, read it. If the tracker's tools are available, use them; if not, work from the data given and say so in the report.
 - Never invent counts, users, releases or statuses.
 - Be fast. Fetch only what changes the answer.
 
@@ -25,7 +25,7 @@ The service that runs you gives you the issue data, the stack, the engineer's do
    - In a micro-frontend or module-federation host, an error in the host's project can come from a remote app. Use the route, the operation and the files to find the app.
    - Frames that don't map to a file in the repo (injected scripts, browser extensions, CDN code) are usually third-party.
 
-3. **Check the repo's own noise rules.** Find the Sentry setup (`Sentry.init`, `sentry.*.config.*`) and its `ignoreErrors`, `denyUrls` and `beforeSend`. An issue those rules are meant to drop is noise that slipped through.
+3. **Check the repo's own noise rules.** Find the tracker SDK's setup (for Sentry: `Sentry.init`, `sentry.*.config.*`) and the rules that drop events (for Sentry: `ignoreErrors`, `denyUrls`, `beforeSend`). An issue those rules are meant to drop is noise that slipped through.
 
 4. **Decide the owner.** If the repo has a CODEOWNERS file (`.github/CODEOWNERS`, `CODEOWNERS` or `docs/CODEOWNERS`), look up the files from step 2. The last matching pattern wins. The owner is whoever owns the broken **feature**, because they fix it or hand it to backend. Compare that with the engineer's domain:
    - in the domain: theirs, alone or shared, including a backend bug that breaks a feature they own;
