@@ -12,6 +12,14 @@ Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh
 
 A repo can bring its own skills. With a terminal in the repo focused, **+ Add skill** also lists the repo's `.claude/skills` and `.claude/commands/*.md`, tagged with the repo's name. Rows offer a repo skill, its key and its case default only while that repo is focused.
 
+## On-call
+
+The Work panel's **On-call** tab watches your error tracker while you are on call and tells you only about the issues that need you. A background service checks for new issues, an AI triages each one against your domain and rules, and you get a notification with a short report and a suggested fix. It keeps running with Herdr closed.
+
+Set it up in ⚙ settings › On-call: paste a token, pick your projects and repo, and describe your domain. Sentry is supported today; other trackers plug in as providers. See [mods/hub/oncall](mods/hub/oncall/README.md).
+
+<img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
+
 ## Community mods
 
 | Mod                                                                                  | What it does                                                                                                     |
