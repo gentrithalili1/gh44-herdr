@@ -1,4 +1,4 @@
-// The ⚙ settings view: General · GitHub · Linear · On-call, shown in the Work panel in place of its list.
+// The ⚙ settings view: General · GitHub · Linear · On-call, shown in the Omnia panel in place of its list.
 // It owns its inputs and edit state; the panel hands it the settings, the session and what to
 // do when the Linear key changes.
 import { div, svg } from "gpui-kit";

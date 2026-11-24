@@ -1,4 +1,4 @@
-// Work panel: GitHub PRs of the current repo and Linear issues, with filters
+// Omnia panel: GitHub PRs of the current repo and Linear issues, with filters
 // and a split button that starts a gh44 skill in a new Claude tab.
 // The same mod opened as a popup (props().menu) draws the dropdown menus.
 import { View, div, svg } from "gpui-kit";
@@ -264,7 +264,7 @@ function findNode(node, id) {
   return null;
 }
 
-// The Work panel is open and showing this mod (not Files or Changes).
+// The Omnia panel is open and showing this mod (not Files or Changes).
 const isPanelShown = () => {
   const root = layout();
   const panel = findNode(root, "panel");
@@ -457,7 +457,7 @@ export default class Hub extends View {
         if (command === "focus") this.handle.focus();
         // `herdr-app do hub.github` / `hub.linear`: show that tab (bindable in keys.json).
         if (command === "github" || command === "linear") setShared(STORE.tab, command);
-        // `herdr-app do hub.oncall` (also a nudge toast's click): the Work panel on the On-call tab.
+        // `herdr-app do hub.oncall` (also a nudge toast's click): the Omnia panel on the On-call tab.
         if (command === "oncall") {
           setShared(STORE.tab, "oncall");
           this.settingsView.close();

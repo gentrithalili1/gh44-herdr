@@ -1,12 +1,12 @@
 # On-call
 
-The On-call tab of the Work panel. While you are on call, it watches your error tracker and tells you only about the issues that need you.
+The On-call tab of the Omnia panel. While you are on call, it watches your error tracker and tells you only about the issues that need you.
 
 <img src="../../../docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
 
 ## Set up
 
-In the Work panel, open ⚙ settings › On-call and follow the steps:
+In the Omnia panel, open ⚙ settings › On-call and follow the steps:
 
 1. **Token.** Paste a token for your tracker. It stays on this machine, readable only by you.
 2. **Org and projects.** Pick what to watch.
