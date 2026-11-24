@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// The On-call service: polls Sentry for the picked projects, runs free filters and an AI triage
+// The On-call service: polls the issue tracker for the picked projects, runs free filters and an AI triage
 // on what is left, and writes decisions and reports to disk, where the Work panel reads them.
 // It runs under herdr-core (`hc run --name gh44-oncall`), so it keeps going while the Herdr
 // window is closed, and stops when you go off call.
 //
 //   main.mjs run --home <dir>                        poll until stopped or off call
-//   main.mjs orgs --home <dir> --token-file <file>   who the token is and its orgs (checks a new token)
+//   main.mjs orgs --home <dir> [--provider <id>] [--token-file <file>]   who the token is and its orgs (checks a new token)
 //   main.mjs projects --home <dir>                   the saved org's projects
 //   main.mjs preview --home <dir>                    what the next check would do, without the AI
 //   main.mjs domain-test --home <dir>                the domain check on the latest issues (cheap model)
@@ -17,17 +17,16 @@ import { readFile, writeFile, rename, mkdir, readdir, rm, stat } from "node:fs/p
 import { spawn, execFile } from "node:child_process";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { readOncallConfig, SENTRY_URL, DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL } from "../oncall-config.js";
-import { toAlert, toAlerts, toOrgs, toProjects, toEventContext, buildIssuesPath } from "./alerts.mjs";
-import { CODEOWNERS_PATHS, SENTRY_FILE_PATTERN, MAX_SENTRY_FILES, cleanCodeowners, collectNoiseRules, buildScanPrompt } from "./repo-scan.mjs";
+import { readOncallConfig, DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL } from "../config.js";
+import { getProvider } from "../providers/catalog.js";
+import { PROVIDER_APIS } from "../providers/index.mjs";
+import { ProviderError, UNAUTHORIZED } from "../providers/contract.js";
+import { CODEOWNERS_PATHS, MAX_SETUP_FILES, cleanCodeowners, collectNoiseRules, buildScanPrompt } from "./repo-scan.mjs";
 import {
   selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions,
 } from "./triage.mjs";
 
-const REQUEST_TIMEOUT_MS = 30_000;
 const MINUTE_MS = 60_000;
-const UNAUTHORIZED = 401;
-const NOT_FOUND = 404;
 // While waiting for the next check, the requests folder is looked at this often.
 const REQUEST_POLL_MS = 2_000;
 // AI runs per check; the rest wait for the next check, so one burst can't run up a bill.
@@ -38,17 +37,13 @@ const HEARTBEAT_STALE_MS = 45_000;
 const CHECK_NOW = "check-now";
 const RERUN_PREFIX = "rerun-";
 
-// Read-only tools for the triage; anything else is denied in print mode.
-const ALLOWED_TOOLS = [
-  "Read", "Grep", "Glob", "ToolSearch", "Bash(git log:*)", "Bash(git blame:*)", "Bash(git show:*)",
-  "mcp__claude_ai_Sentry__get_sentry_resource", "mcp__claude_ai_Sentry__search_issues", "mcp__claude_ai_Sentry__search_errors",
-  "mcp__claude_ai_Sentry__search_replays", "mcp__claude_ai_Sentry__analyze_issue_with_seer",
-];
-const DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "mcp__claude_ai_Sentry__update_issue", "mcp__claude_ai_Slack"];
+// Read-only tools for the triage, plus the provider's own (catalog.js); anything else is denied in print mode.
+const ALLOWED_TOOLS = ["Read", "Grep", "Glob", "ToolSearch", "Bash(git log:*)", "Bash(git blame:*)", "Bash(git show:*)"];
+const DISALLOWED_TOOLS = ["Edit", "Write", "NotebookEdit", "mcp__claude_ai_Slack"];
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
-  options: { home: { type: "string" }, "token-file": { type: "string" } },
+  options: { home: { type: "string" }, "token-file": { type: "string" }, provider: { type: "string" } },
 });
 const [command] = positionals;
 if (!values.home) {
@@ -58,7 +53,6 @@ if (!values.home) {
 const HOME = values.home;
 const ONCALL = join(HOME, "oncall");
 const paths = {
-  token: values["token-file"] ?? join(HOME, "sentry-token"),
   config: join(ONCALL, "config.json"),
   alerts: join(ONCALL, "alerts.json"),
   status: join(ONCALL, "status.json"),
@@ -79,20 +73,6 @@ const log = (line) => process.stdout.write(`${new Date().toISOString()} ${line}\
 /** @param {unknown} error */
 const toMessage = (error) => (error instanceof Error ? error.message : String(error));
 
-// Sentry's error detail as text: a string, or an object with a message (403s answer that way).
-/** @param {string} text @returns {string | null} */
-function readErrorDetail(text) {
-  let detail = null;
-  try {
-    detail = JSON.parse(text).detail;
-  } catch {
-    return null;
-  }
-  if (typeof detail === "string") return detail;
-  if (detail && typeof detail === "object" && typeof detail.message === "string") return detail.message;
-  return detail ? JSON.stringify(detail) : null;
-}
-
 /** @param {string} path */
 async function readJson(path) {
   try {
@@ -111,64 +91,51 @@ async function writeJson(path, value) {
   await rename(temp, path);
 }
 
-class SentryError extends Error {
-  /** @param {{ status: number, message: string }} params */
-  constructor({ status, message }) {
-    super(message);
-    this.status = status;
-  }
-}
-
-async function readToken() {
-  const token = (await readFile(paths.token, "utf8").catch(() => "")).trim();
-  if (!token) throw new SentryError({ status: UNAUTHORIZED, message: "No Sentry token saved" });
+// The provider's token: a new one being checked (--token-file), else the saved <provider>-token.
+/** @param {import("../providers/catalog.js").ProviderId} provider */
+async function readToken(provider) {
+  const file = values["token-file"] ?? join(HOME, `${provider}-token`);
+  const token = (await readFile(file, "utf8").catch(() => "")).trim();
+  if (!token) throw new ProviderError({ status: UNAUTHORIZED, message: `No ${getProvider(provider).name} token saved` });
   return token;
-}
-
-/** @param {{ baseUrl: string, path: string, token: string }} params */
-async function sentryGet({ baseUrl, path, token }) {
-  const response = await fetch(`${baseUrl}/api/0${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new SentryError({ status: response.status, message: readErrorDetail(text) ?? `Sentry answered ${response.status}` });
-  }
-  return JSON.parse(text);
 }
 
 /** @param {unknown} error */
 const toFailure = (error) => ({
   status: "error",
-  reason: error instanceof SentryError && error.status === UNAUTHORIZED ? "auth" : "failed",
+  reason: error instanceof ProviderError && error.status === UNAUTHORIZED ? "auth" : "failed",
   message: toMessage(error),
 });
 
-// The token's owner and orgs. Org lists and the user live on sentry.io, whatever the region.
+const readConfig = async () => readOncallConfig(await readJson(paths.config));
+
+// The token's owner and orgs; --provider names the tracker of a token not saved yet.
 async function listOrgs() {
-  const token = await readToken();
-  const [auth, orgs] = await Promise.all([
-    sentryGet({ baseUrl: SENTRY_URL, path: "/auth/", token }).catch(() => null),
-    sentryGet({ baseUrl: SENTRY_URL, path: "/organizations/?member=1", token }),
-  ]);
-  return { status: "success", user: auth?.name || auth?.email || null, orgs: toOrgs(orgs) };
+  const provider = getProvider(values.provider ?? (await readConfig()).provider).id;
+  const token = await readToken(provider);
+  return { status: "success", ...(await PROVIDER_APIS[provider].listOrgs({ token })) };
 }
 
 async function listProjects() {
-  const config = readOncallConfig(await readJson(paths.config));
+  const config = await readConfig();
   if (!config.org) return { status: "error", reason: "failed", message: "Pick an organization first" };
-  const token = await readToken();
-  const body = await sentryGet({ baseUrl: config.org.regionUrl, path: `/organizations/${encodeURIComponent(config.org.slug)}/projects/?per_page=100`, token });
-  return { status: "success", projects: toProjects(body) };
+  const token = await readToken(config.provider);
+  return { status: "success", projects: await PROVIDER_APIS[config.provider].listProjects({ token, org: config.org }) };
 }
+
+// The picked projects' issues seen in the look-back window.
+/** @param {{ config: OncallConfig, org: Org, token: string }} params */
+const listIssues = ({ config, org, token }) => PROVIDER_APIS[config.provider].listIssues({
+  token, org, projectIds: config.projects.map((p) => p.id), environments: config.environments, hours: config.catchUpHours,
+});
 
 /** @param {number} ms */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** @typedef {import("../oncall-config.js").OncallConfig} OncallConfig */
+/** @typedef {import("../config.js").OncallConfig} OncallConfig */
 /** @typedef {import("./triage.mjs").Decision} Decision */
-/** @typedef {import("./alerts.mjs").Alert} Alert */
+/** @typedef {import("../providers/contract.js").Alert} Alert */
+/** @typedef {import("../providers/contract.js").Org} Org */
 
 // The panel's requests, taken (deleted) as they are read.
 async function takeRequests() {
@@ -178,19 +145,9 @@ async function takeRequests() {
 }
 
 /** @param {{ config: OncallConfig, token: string, issueId: string }} params */
-async function loadEventContext({ config, token, issueId }) {
-  const org = /** @type {NonNullable<OncallConfig["org"]>} */ (config.org);
-  const path = `/organizations/${encodeURIComponent(org.slug)}/issues/${encodeURIComponent(issueId)}/events/latest/`;
-  const environment = config.environments[0];
-  try {
-    return toEventContext(await sentryGet({ baseUrl: org.regionUrl, path: environment ? `${path}?${new URLSearchParams({ environment })}` : path, token }));
-  } catch (error) {
-    if (error instanceof SentryError && error.status === NOT_FOUND && environment) {
-      return toEventContext(await sentryGet({ baseUrl: org.regionUrl, path, token }).catch(() => null));
-    }
-    return null;
-  }
-}
+const loadEventContext = ({ config, token, issueId }) => (config.org
+  ? PROVIDER_APIS[config.provider].getContext({ token, org: config.org, id: issueId, environments: config.environments })
+  : Promise.resolve(null));
 
 // Headless `claude -p` with read-only tools, in the code folder when one is set.
 // The domain check runs with no tools at all: it answers from the prompt.
@@ -198,8 +155,9 @@ async function loadEventContext({ config, token, issueId }) {
 function runClaude({ config, prompt, cwd, model = config.model, isToolless = false }) {
   return new Promise((resolve, reject) => {
     // The built-in skill is in the prompt itself; any other one runs through the Skill tool.
-    const allowed = config.triageSkill === BUILT_IN_TRIAGE_SKILL ? ALLOWED_TOOLS : [...ALLOWED_TOOLS, "Skill"];
-    const tools = isToolless ? ["--tools", ""] : ["--allowedTools", ...allowed, "--disallowedTools", ...DISALLOWED_TOOLS];
+    const { aiTools } = getProvider(config.provider);
+    const allowed = [...ALLOWED_TOOLS, ...aiTools.allowed, ...(config.triageSkill === BUILT_IN_TRIAGE_SKILL ? [] : ["Skill"])];
+    const tools = isToolless ? ["--tools", ""] : ["--allowedTools", ...allowed, "--disallowedTools", ...DISALLOWED_TOOLS, ...aiTools.disallowed];
     const args = ["-p", "--output-format", "json", "--model", model, ...tools];
     // Its own process group, so nothing claude signals on exit reaches the service.
     const child = spawn(config.claudePath ?? "claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], detached: true });
@@ -226,7 +184,7 @@ function runClaude({ config, prompt, cwd, model = config.model, isToolless = fal
   });
 }
 
-const BUILT_IN_SKILL_FILE = new URL("./skills/oncall-triage/SKILL.md", import.meta.url);
+const BUILT_IN_SKILL_FILE = new URL("../skills/oncall-triage/SKILL.md", import.meta.url);
 
 // The bundled triage skill's steps; "" when the file can't be read (the prompt still has the rules).
 async function readBuiltInGuide() {
@@ -281,7 +239,7 @@ async function triageWithAi({ config, alert, trigger, token }) {
     const verdict = parseVerdict(run.text);
     await mkdir(paths.reports, { recursive: true });
     const reportPath = join(paths.reports, `${alert.shortId}.md`);
-    await writeFile(reportPath, `${stripVerdict(run.text)}\n\n[Open in Sentry](${alert.url})\n`, { mode: 0o600 });
+    await writeFile(reportPath, `${stripVerdict(run.text)}\n\n[Open in ${getProvider(config.provider).name}](${alert.url})\n`, { mode: 0o600 });
     if (run.isError || !verdict) {
       return toDecision({ alert, trigger, at, details: { stage: "failed", outcome: "failed", summary: run.isError ? "Claude returned an error" : "Claude gave no verdict", sessionId: run.sessionId || null, reportPath, cwd, costUsd: run.costUsd } });
     }
@@ -300,15 +258,10 @@ async function triageWithAi({ config, alert, trigger, token }) {
 
 // One check without the AI: how many issues, which would go to the AI, which the free filters stop.
 async function previewCheck() {
-  const config = readOncallConfig(await readJson(paths.config));
+  const config = await readConfig();
   if (!config.org || config.projects.length === 0) return { status: "error", reason: "failed", message: "Pick an organization and projects first" };
-  const token = await readToken();
-  const body = await sentryGet({
-    baseUrl: config.org.regionUrl,
-    path: buildIssuesPath({ org: config.org.slug, projectIds: config.projects.map((p) => p.id), environments: config.environments, hours: config.catchUpHours }),
-    token,
-  });
-  const alerts = toAlerts(body);
+  const token = await readToken(config.provider);
+  const alerts = await listIssues({ config, org: config.org, token });
   const decisions = (await readJson(paths.decisions))?.items ?? {};
   const work = selectWork({ alerts, decisions, now: Date.now(), hours: config.catchUpHours });
   const filtered = work.map((w) => ({ ...w, filter: runFreeFilters({ alert: w.alert, trigger: w.trigger, config }) }));
@@ -326,16 +279,11 @@ async function previewCheck() {
 // The domain check on the few latest issues with a stack, to see it decide before it filters anything.
 const DOMAIN_TEST_ISSUES = 5;
 async function testDomain() {
-  const config = readOncallConfig(await readJson(paths.config));
+  const config = await readConfig();
   if (!config.org || config.projects.length === 0) return { status: "error", reason: "failed", message: "Pick an organization and projects first" };
   if (!config.domain) return { status: "error", reason: "failed", message: "Save your domain first" };
-  const token = await readToken();
-  const body = await sentryGet({
-    baseUrl: config.org.regionUrl,
-    path: buildIssuesPath({ org: config.org.slug, projectIds: config.projects.map((p) => p.id), environments: config.environments, hours: config.catchUpHours }),
-    token,
-  });
-  const alerts = toAlerts(body).filter((a) => a.priority !== "low").slice(0, DOMAIN_TEST_ISSUES);
+  const token = await readToken(config.provider);
+  const alerts = (await listIssues({ config, org: config.org, token })).filter((a) => a.priority !== "low").slice(0, DOMAIN_TEST_ISSUES);
   const results = await Promise.all(alerts.map(async (alert) => {
     const context = await loadEventContext({ config, token, issueId: alert.id });
     try {
@@ -368,26 +316,20 @@ async function runService() {
   /** @type {string[]} */
   let rerunIds = [];
   for (;;) {
-    const config = readOncallConfig(await readJson(paths.config));
+    const config = await readConfig();
     if (!config.isOn || !config.org) await stop();
     const org = /** @type {NonNullable<OncallConfig["org"]>} */ (config.org);
     const at = new Date().toISOString();
     try {
-      const token = await readToken();
-      const body = await sentryGet({
-        baseUrl: org.regionUrl,
-        path: buildIssuesPath({ org: org.slug, projectIds: config.projects.map((p) => p.id), environments: config.environments, hours: config.catchUpHours }),
-        token,
-      });
-      const alerts = toAlerts(body);
+      const token = await readToken(config.provider);
+      const alerts = await listIssues({ config, org, token });
       await writeJson(paths.alerts, { fetchedAt: at, items: alerts });
       await writeStatus({ lastPollAt: at, lastError: null, alertCount: alerts.length });
       /** @type {Record<string, Decision>} */
       let decisions = (await readJson(paths.decisions))?.items ?? {};
       const work = selectWork({ alerts, decisions, now: Date.now(), hours: config.catchUpHours });
       for (const id of rerunIds) {
-        const alert = alerts.find((a) => a.id === id)
-          ?? toAlert(await sentryGet({ baseUrl: org.regionUrl, path: `/organizations/${encodeURIComponent(org.slug)}/issues/${encodeURIComponent(id)}/`, token }).catch(() => null));
+        const alert = alerts.find((a) => a.id === id) ?? (await PROVIDER_APIS[config.provider].getIssue({ token, org, id }));
         if (alert) work.unshift({ alert, trigger: "rerun" });
       }
       rerunIds = [];
@@ -421,7 +363,7 @@ async function runService() {
       const requests = await takeRequests();
       rerunIds = [...rerunIds, ...requests.rerunIds];
       if (requests.isCheckNow || rerunIds.length > 0) break;
-      if (!readOncallConfig(await readJson(paths.config)).isOn) await stop();
+      if (!(await readConfig()).isOn) await stop();
     }
   }
 }
@@ -434,9 +376,9 @@ const runGit = ({ args, cwd }) => new Promise((resolve) => {
   execFile("git", args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => resolve(error ? "" : String(stdout)));
 });
 
-// What code reads exactly: CODEOWNERS and the Sentry setup files' noise rules.
-/** @param {string} folder @returns {Promise<import("./repo-scan.mjs").RepoFacts>} */
-async function readRepoFacts(folder) {
+// What code reads exactly: CODEOWNERS and the noise rules in the tracker SDK's setup files.
+/** @param {{ folder: string, provider: import("../providers/catalog.js").Provider }} params @returns {Promise<import("./repo-scan.mjs").RepoFacts>} */
+async function readRepoFacts({ folder, provider }) {
   let codeowners = "";
   let codeownersPath = null;
   for (const path of CODEOWNERS_PATHS) {
@@ -447,24 +389,26 @@ async function readRepoFacts(folder) {
       break;
     }
   }
-  const listed = await runGit({ args: ["grep", "-l", "-I", "-E", SENTRY_FILE_PATTERN, "--", ".", ":!*.test.*", ":!*.spec.*", ":!**/__tests__/**"], cwd: folder });
-  const sentryFiles = listed.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, MAX_SENTRY_FILES);
-  const files = await Promise.all(sentryFiles.map(async (path) => ({ path, source: await readFile(join(folder, path), "utf8").catch(() => "") })));
-  return { codeowners, codeownersPath, sentryFiles, ...collectNoiseRules(files) };
+  const { filePattern, noiseKeys } = provider.setupScan;
+  const listed = await runGit({ args: ["grep", "-l", "-I", "-E", filePattern, "--", ".", ":!*.test.*", ":!*.spec.*", ":!**/__tests__/**"], cwd: folder });
+  const setupFiles = listed.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, MAX_SETUP_FILES);
+  const files = await Promise.all(setupFiles.map(async (path) => ({ path, source: await readFile(join(folder, path), "utf8").catch(() => "") })));
+  return { codeowners, codeownersPath, setupFiles, ...collectNoiseRules({ files, keys: noiseKeys }) };
 }
 
 // The setup scan of the picked repo: the facts code reads, then a short AI summary of the rest.
 async function scanRepo() {
-  const config = readOncallConfig(await readJson(paths.config));
+  const config = await readConfig();
   const folder = config.codeFolder;
   if (!folder || !(await isFolder(folder))) return { status: "error", reason: "failed", message: "Pick your repo folder first" };
-  const facts = await readRepoFacts(folder);
-  const run = await runClaude({ config, prompt: buildScanPrompt({ folder, facts }), cwd: folder, model: SCAN_MODEL });
+  const provider = getProvider(config.provider);
+  const facts = await readRepoFacts({ folder, provider });
+  const run = await runClaude({ config, prompt: buildScanPrompt({ folder, facts, provider }), cwd: folder, model: SCAN_MODEL });
   if (run.isError || !run.text.trim()) return { status: "error", reason: "failed", message: "The AI part of the scan gave no answer" };
-  /** @type {import("../oncall-config.js").RepoProfile} */
+  /** @type {import("../config.js").RepoProfile} */
   const profile = {
-    folder, scannedAt: new Date().toISOString(), codeowners: facts.codeowners, sentryFiles: facts.sentryFiles,
-    ignoreErrors: facts.ignoreErrors, denyUrls: facts.denyUrls, summary: run.text.trim(), costUsd: run.costUsd,
+    folder, scannedAt: new Date().toISOString(), codeowners: facts.codeowners, setupFiles: facts.setupFiles,
+    noiseRules: facts.noiseRules, summary: run.text.trim(), costUsd: run.costUsd,
   };
   return { status: "success", profile };
 }

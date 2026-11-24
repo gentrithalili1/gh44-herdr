@@ -3,19 +3,20 @@ import assert from "node:assert/strict";
 import {
   readOncallConfig, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
   POLL_MINUTES, NOTIFY_SEVERITY_OPTIONS, BUILT_IN_TRIAGE_SKILL,
-} from "../mods/hub/oncall-config.js";
+} from "../mods/hub/oncall/config.js";
 import { readFileSync } from "node:fs";
-import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall-service/alerts.mjs";
-import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall-service/triage.mjs";
-import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall-service/repo-scan.mjs";
-import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall-decisions.js";
+import { PROVIDERS, getProvider, DEFAULT_PROVIDER } from "../mods/hub/oncall/providers/catalog.js";
+import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall/providers/sentry-parse.mjs";
+import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall/service/triage.mjs";
+import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall/service/repo-scan.mjs";
+import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall/decisions.js";
 
-const org = { slug: "acme", name: "Acme", regionUrl: "https://de.sentry.io" };
+const org = { slug: "acme", name: "Acme", apiUrl: "https://de.sentry.io" };
 const web = { id: "1", slug: "web" };
 const api = { id: "2", slug: "api" };
 const config = readOncallConfig({ isOn: true, org, projects: [web] });
 
-/** @param {Partial<import("../mods/hub/oncall-service/alerts.mjs").Alert>} patch */
+/** @param {Partial<import("../mods/hub/oncall/providers/contract.js").Alert>} patch */
 const alert = (patch = {}) => ({
   id: "42", shortId: "WEB-1A", title: "TypeError: x is undefined", culprit: "app/job.tsx", level: "error", priority: "high",
   project: "web", url: "https://acme.sentry.io/issues/42/", kind: "new", firstSeen: "2026-11-23T08:00:00Z", lastSeen: "2026-11-23T10:00:00Z",
@@ -51,8 +52,20 @@ test("broken fields fall back one by one; saved ones are kept", () => {
   assert.deepEqual(readOncallConfig({ environments: [] }).environments, []);
 });
 
-test("an org without a region falls back to sentry.io, and one without a name to its slug", () => {
-  assert.deepEqual(readOncallConfig({ org: { slug: "acme" } }).org, { slug: "acme", name: "acme", regionUrl: "https://sentry.io" });
+test("an org without an API host falls back to the tracker's, one without a name to its slug, and an old regionUrl still reads", () => {
+  assert.deepEqual(readOncallConfig({ org: { slug: "acme" } }).org, { slug: "acme", name: "acme", apiUrl: "https://sentry.io" });
+  assert.equal(readOncallConfig({ org: { slug: "acme", regionUrl: "https://de.sentry.io" } }).org?.apiUrl, "https://de.sentry.io");
+});
+
+test("the provider defaults to Sentry, an unknown one falls back to it, and prompts name the tracker", () => {
+  assert.equal(readOncallConfig({}).provider, DEFAULT_PROVIDER);
+  assert.equal(readOncallConfig({ provider: "nope" }).provider, DEFAULT_PROVIDER);
+  assert.equal(getProvider("nope"), PROVIDERS[DEFAULT_PROVIDER]);
+  for (const provider of Object.values(PROVIDERS)) {
+    assert.ok(provider.name && provider.token.help && provider.setupScan.noiseKeys.length, `${provider.id} is complete`);
+  }
+  assert.match(buildPrompt({ config, alert: alert(), context: null, trigger: "new" }), /You triage one Sentry issue/);
+  assert.match(buildDomainPrompt({ config: { ...config, domain: "apps/web" }, alert: alert(), context: null }), /is this Sentry issue in/);
 });
 
 test("On-call can start once a token, an org and a project are set, in that order", () => {
@@ -129,8 +142,8 @@ test("the latest event gives the message, app frames first and the useful tags",
 
 test("orgs keep their region host and sort by name; projects sort by slug", () => {
   assert.deepEqual(toOrgs([{ slug: "b", name: "Beta", links: { regionUrl: "https://de.sentry.io" } }, { slug: "a", name: "Alpha" }, { name: "no slug" }]), [
-    { slug: "a", name: "Alpha", regionUrl: "https://sentry.io" },
-    { slug: "b", name: "Beta", regionUrl: "https://de.sentry.io" },
+    { slug: "a", name: "Alpha", apiUrl: "https://sentry.io" },
+    { slug: "b", name: "Beta", apiUrl: "https://de.sentry.io" },
   ]);
   assert.deepEqual(toProjects([{ id: "2", slug: "web" }, { id: "1", slug: "api" }, { slug: "x" }]), [{ id: "1", slug: "api" }, { id: "2", slug: "web" }]);
 });
@@ -245,7 +258,7 @@ test("an issue outside the domain lands in Filtered, not Needs you", () => {
 
 test("the built-in triage skill is the default and goes into the prompt as text, without its frontmatter", () => {
   assert.equal(readOncallConfig({}).triageSkill, BUILT_IN_TRIAGE_SKILL);
-  const skill = readFileSync(new URL("../mods/hub/oncall-service/skills/oncall-triage/SKILL.md", import.meta.url), "utf8");
+  const skill = readFileSync(new URL("../mods/hub/oncall/skills/oncall-triage/SKILL.md", import.meta.url), "utf8");
   assert.match(skill, /^---\nname: oncall-triage\n/);
   const guide = stripFrontmatter(skill);
   assert.ok(guide.startsWith("# On-call triage"));
@@ -275,24 +288,26 @@ test("the scan reads ignoreErrors and denyUrls literals, regexes and spreads, ea
   const { patterns, spreads } = extractArrayPatterns({ source, key: "ignoreErrors" });
   assert.deepEqual(patterns, ["ResizeObserver loop limit exceeded", "Non-Error promise rejection", "/chrome-extension:\\/\\//i", "Can't find variable: [x]"]);
   assert.deepEqual(spreads, ["COMMON_IGNORED"]);
-  const rules = collectNoiseRules([{ path: "a.ts", source }, { path: "b.ts", source }]);
-  assert.equal(rules.ignoreErrors.length, 4);
-  assert.deepEqual(rules.denyUrls, ["/extensions\\//i", "googletagmanager.com"]);
+  const { noiseRules } = collectNoiseRules({ files: [{ path: "a.ts", source }, { path: "b.ts", source }], keys: PROVIDERS.sentry.setupScan.noiseKeys });
+  assert.equal(noiseRules.ignoreErrors.length, 4);
+  assert.deepEqual(noiseRules.denyUrls, ["/extensions\\//i", "googletagmanager.com"]);
   assert.deepEqual(extractArrayPatterns({ source: "const x = 1", key: "ignoreErrors" }), { patterns: [], spreads: [] });
 });
 
 test("CODEOWNERS loses comments and blanks; the scan prompt carries what code read", () => {
   assert.equal(cleanCodeowners("# owners\n\n/apps/web/ @acme/web\n  /packages/ui/ @acme/platform  \n"), "/apps/web/ @acme/web\n/packages/ui/ @acme/platform");
-  const prompt = buildScanPrompt({ folder: "/code/web", facts: { codeowners: "/apps/web/ @acme/web", codeownersPath: ".github/CODEOWNERS", sentryFiles: ["apps/web/sentry.ts"], ignoreErrors: ["ResizeObserver"], denyUrls: [], spreads: ["COMMON_IGNORED"] } });
+  const prompt = buildScanPrompt({ folder: "/code/web", facts: { codeowners: "/apps/web/ @acme/web", codeownersPath: ".github/CODEOWNERS", setupFiles: ["apps/web/sentry.ts"], noiseRules: { ignoreErrors: ["ResizeObserver"], denyUrls: [] }, spreads: ["COMMON_IGNORED"] }, provider: PROVIDERS.sentry });
   assert.match(prompt, /## CODEOWNERS \(\.github\/CODEOWNERS\)\n\/apps\/web\/ @acme\/web/);
   assert.match(prompt, /## Spread into them \(resolve these\)\n- COMMON_IGNORED/);
   assert.match(prompt, /## denyUrls found\n- \(none\)/);
 });
 
 test("a saved repo profile is read back safely and goes into the triage and domain prompts", () => {
+  // Saved before profiles were tracker-agnostic: sentryFiles, ignoreErrors and denyUrls as fields.
   const profile = { folder: "/code/web", scannedAt: "2026-11-24T09:00:00Z", codeowners: "/apps/web/ @acme/web", sentryFiles: ["apps/web/sentry.ts", 3], ignoreErrors: ["ResizeObserver"], denyUrls: [], summary: "## Apps and areas\n- apps/web", costUsd: 0.02 };
   const c = readOncallConfig({ ...config, repoProfile: profile });
-  assert.deepEqual(c.repoProfile?.sentryFiles, ["apps/web/sentry.ts"]);
+  assert.deepEqual(c.repoProfile?.setupFiles, ["apps/web/sentry.ts"]);
+  assert.deepEqual(c.repoProfile?.noiseRules, { ignoreErrors: ["ResizeObserver"], denyUrls: [] });
   assert.equal(readOncallConfig({ repoProfile: { summary: "no folder" } }).repoProfile, null);
   assert.equal(formatRepoContext(null), "");
   const prompt = buildPrompt({ config: c, alert: alert(), context: null, trigger: "new" });

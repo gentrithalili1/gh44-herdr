@@ -1,33 +1,33 @@
-// The settings' On-call section: the Sentry token, the org and projects to watch, how often,
+// The settings' On-call section: the tracker token, the org and projects to watch, how often,
 // and the on-call switch that starts or stops the background service.
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify, pickFolder, shared, setShared } from "herdr";
-import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./oncall-decisions.js";
-import { openOncallTextDialog, ONCALL_TEXT_SAVED_STORE } from "./oncall-text-dialog.js";
-import { icon, palette, stop, toAnchor, MONO_FONT } from "./ui.js";
+import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./decisions.js";
+import { openOncallTextDialog, ONCALL_TEXT_SAVED_STORE } from "./text-dialog.js";
+import { icon, palette, stop, toAnchor, MONO_FONT } from "../ui.js";
 import {
-  POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, SENTRY_PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
+  POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
   DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
-} from "./oncall-config.js";
+} from "./config.js";
 import {
-  loadOncallConfig, saveOncallConfig, hasSentryToken, saveSentryToken, removeSentryToken, loadSentryAccount,
-  loadSentryProjects, loadServiceStatus, startOncall, stopOncall, playAlertSound, loadPreview, testDomain, scanRepo,
-} from "./oncall.js";
-import { loadInstalledSkills, loadRepoSkills } from "./actions.js";
-import { isValidSkillName } from "./settings.js";
+  loadOncallConfig, saveOncallConfig, hasTrackerToken, saveTrackerToken, removeTrackerToken, loadTrackerAccount,
+  loadTrackerProjects, loadServiceStatus, startOncall, stopOncall, playAlertSound, loadPreview, testDomain, scanRepo,
+} from "./client.js";
+import { loadInstalledSkills, loadRepoSkills } from "../actions.js";
+import { isValidSkillName } from "../settings.js";
+import { getProvider } from "./providers/catalog.js";
 
-/** @typedef {"sentryToken" | "nudgeRules" | "neverRules" | "environments"} OncallInputId */
+/** @typedef {"trackerToken" | "nudgeRules" | "neverRules" | "environments"} OncallInputId */
 // Long texts show this many lines in settings; the rest opens in a dialog.
 const PREVIEW_LINES = 3;
 /** @param {string} text */
 const capitalize = (text) => `${text[0]?.toUpperCase() ?? ""}${text.slice(1)}`;
 
-/** @typedef {import("./oncall-config.js").OncallConfig} OncallConfig */
-/** @typedef {import("./oncall-config.js").SentryOrg} SentryOrg */
-/** @typedef {import("./oncall-config.js").SentryProject} SentryProject */
+/** @typedef {import("./config.js").OncallConfig} OncallConfig */
+/** @typedef {import("./config.js").Org} Org */
+/** @typedef {import("./config.js").Project} Project */
 
-const SENTRY_TOKENS_URL = "https://sentry.io/settings/account/api/auth-tokens/";
 // While the section shows, the service's status is read this often.
 const STATUS_REFRESH_MS = 5_000;
 // The token and the org's projects are checked again on opening only when older than this; until
@@ -50,11 +50,11 @@ const SETTING_SELECTS = {
 /** @typedef {keyof typeof SETTING_SELECTS} SettingSelect */
 // Picked projects named on the closed project select before it says "+N more".
 const PROJECTS_NAMED = 3;
-/** @type {import("./oncall-config.js").SetupStep[]} */
+/** @type {import("./config.js").SetupStep[]} */
 const SETUP_STEPS = ["token", "org", "projects", "repo", "domain"];
-/** @type {Record<import("./oncall-config.js").SetupStep, string>} */
+/** @type {Record<import("./config.js").SetupStep, string>} */
 const MISSING_SETUP = {
-  token: "Save a Sentry token first.",
+  token: "Save a token for your issue tracker first.",
   org: "Pick an organization.",
   projects: "Pick at least one project.",
   repo: "Pick the repo you are on call for.",
@@ -79,7 +79,7 @@ export class OncallSettings {
    *   settingsGroup: (params: { title: string, description: string, children: any[] }) => any,
    *   settingsToggle: (params: { id: string, label: string, isOn: boolean, onToggle: (cx: import("gpui-kit").Context) => void }) => any,
    *   settingsChoice: (params: { id: string, label: string, isOn: boolean, onPick: (cx: import("gpui-kit").Context) => void }) => any,
-   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
+   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("../ui.js").Anchor | null }) => void,
    *   skillGroups: () => any[],
    * }} host
    */
@@ -87,20 +87,20 @@ export class OncallSettings {
     this.host = host;
     /** @type {OncallConfig | null} */
     this.config = null;
-    /** @type {{ status: "idle" | "checking" | "connected" | "missing" | "failed", user?: string | null, orgs?: SentryOrg[], message?: string }} */
+    /** @type {{ status: "idle" | "checking" | "connected" | "missing" | "failed", user?: string | null, orgs?: Org[], message?: string }} */
     this.account = { status: "idle" };
     // When the token was last checked, and whether a check runs now.
     this.accountCheckedAt = 0;
     this.isAccountChecking = false;
     // Each org's loaded projects and when, so switching orgs back and forth shows them at once.
-    /** @type {Map<string, { items: SentryProject[], at: number }>} */
+    /** @type {Map<string, { items: Project[], at: number }>} */
     this.projectsByOrg = new Map();
     // The orgs whose projects are loading now.
     /** @type {Set<string>} */
     this.projectsLoading = new Set();
-    /** @type {{ status: "idle" | "loading" | "success" | "failed", items: SentryProject[], message?: string }} */
+    /** @type {{ status: "idle" | "loading" | "success" | "failed", items: Project[], message?: string }} */
     this.projects = { status: "idle", items: [] };
-    /** @type {import("./oncall.js").ServiceStatus | null} */
+    /** @type {import("./client.js").ServiceStatus | null} */
     this.service = null;
     this.statusReadAt = 0;
     /** @type {{ status: "idle" | "saving" | "failed", message?: string }} */
@@ -113,17 +113,17 @@ export class OncallSettings {
     /** @type {{ status: "idle" | "loading" | "success" | "failed", text?: string, lines?: { mine: string, text: string }[] }} */
     this.domainTest = { status: "idle" };
     this.isAdvancedOpen = false;
-    this.tokenInput = InputState.new({ placeholder: "sntryu_…" });
+    this.tokenInput = InputState.new({ placeholder: "Paste the token…" });
     this.tokenInput.set_masked(true);
     this.tokenInput.on("submit", (_e, cx) => this.handleSaveToken(cx));
-    host.trackFocus({ input: this.tokenInput, id: "sentryToken" });
+    host.trackFocus({ input: this.tokenInput, id: "trackerToken" });
     this.nudgeInput = InputState.new({ placeholder: "Describe when you want a nudge…" });
     this.nudgeInput.on("submit", (_e, cx) => this.handleAddRule({ cx, list: "nudgeRules", text: this.nudgeInput.value() }));
     host.trackFocus({ input: this.nudgeInput, id: "nudgeRules" });
     this.neverInput = InputState.new({ placeholder: "Describe what never deserves a nudge…" });
     this.neverInput.on("submit", (_e, cx) => this.handleAddRule({ cx, list: "neverRules", text: this.neverInput.value() }));
     host.trackFocus({ input: this.neverInput, id: "neverRules" });
-    // The repo scan: CODEOWNERS and Sentry noise rules read by code, then a short AI summary.
+    // The repo scan: CODEOWNERS and the SDK's noise rules read by code, then a short AI summary.
     /** @type {{ status: "idle" | "scanning" | "failed", message?: string }} */
     this.scan = { status: "idle" };
     // The last save from the long-text dialog this view has read.
@@ -139,7 +139,7 @@ export class OncallSettings {
     /** @type {Set<SettingSelect>} */
     this.openSettingSelects = new Set();
     // The select field pressed last: its menu opens under it.
-    /** @type {import("./ui.js").Anchor | null} */
+    /** @type {import("../ui.js").Anchor | null} */
     this.selectAnchor = null;
     this.envInput = InputState.new({ placeholder: "production" });
     /** @type {[import("gpui-base").InputState, "environments"][]} */
@@ -217,7 +217,7 @@ export class OncallSettings {
         return severities ? { ...config, notifySeverities: severities } : config;
       }
       case "priorities": {
-        const priorities = pickSome({ picked: list, order: SENTRY_PRIORITIES });
+        const priorities = pickSome({ picked: list, order: PRIORITIES });
         return priorities ? { ...config, aiPriorities: priorities } : config;
       }
       case "model": {
@@ -267,7 +267,7 @@ export class OncallSettings {
       this.account = { status: "checking" };
       cx.notify();
     }
-    const r = await loadSentryAccount();
+    const r = await loadTrackerAccount();
     this.isAccountChecking = false;
     this.accountCheckedAt = Date.now();
     if (r.status === "success") this.account = { status: "connected", user: r.user, orgs: r.orgs };
@@ -280,7 +280,7 @@ export class OncallSettings {
   /** @param {import("gpui-kit").Context} cx */
   async loadProjects(cx) {
     const org = this.config?.org?.slug ?? null;
-    if (!org || !(await hasSentryToken())) {
+    if (!org || !(await hasTrackerToken())) {
       this.projects = { status: "idle", items: [] };
       this.projectsByOrg.clear();
       cx.notify();
@@ -292,7 +292,7 @@ export class OncallSettings {
     cx.notify();
     if ((cached && Date.now() - cached.at < ACCOUNT_REFRESH_MS) || this.projectsLoading.has(org)) return;
     this.projectsLoading.add(org);
-    const r = await loadSentryProjects();
+    const r = await loadTrackerProjects();
     this.projectsLoading.delete(org);
     if (r.status === "success") this.projectsByOrg.set(org, { items: r.projects, at: Date.now() });
     // Another org picked meanwhile: its own load fills the screen.
@@ -349,7 +349,7 @@ export class OncallSettings {
     this.tokenSave = { status: "saving" };
     cx.notify();
     cx.spawn(async (cx) => {
-      const r = await saveSentryToken(token);
+      const r = await saveTrackerToken(token);
       if (r.status === "success") {
         this.tokenSave = { status: "idle" };
         this.tokenInput.set_value("");
@@ -358,7 +358,7 @@ export class OncallSettings {
         // One org: picked for you.
         if (!this.config?.org && r.orgs.length === 1 && this.config) await this.pickOrg({ cx, org: r.orgs[0] });
       } else {
-        this.tokenSave = { status: "failed", message: r.message ?? "Sentry did not accept this token" };
+        this.tokenSave = { status: "failed", message: r.message ?? `${this.tracker.name} did not accept this token` };
       }
       cx.notify();
     });
@@ -368,20 +368,20 @@ export class OncallSettings {
   handleRemoveToken(cx) {
     cx.spawn(async (cx) => {
       if (this.config?.isOn) await this.switchOncall({ cx, isOn: false });
-      const r = await removeSentryToken();
+      const r = await removeTrackerToken();
       if (r.status === "success") {
         this.account = { status: "missing" };
         this.accountCheckedAt = Date.now();
         this.projects = { status: "idle", items: [] };
         this.projectsByOrg.clear();
       } else {
-        notify({ title: "Could not remove the Sentry token", body: r.message, level: "warning" });
+        notify({ title: `Could not remove the ${this.tracker.name} token`, body: r.message, level: "warning" });
       }
       cx.notify();
     });
   }
 
-  /** @param {{ cx: import("gpui-kit").Context, org: SentryOrg }} params */
+  /** @param {{ cx: import("gpui-kit").Context, org: Org }} params */
   async pickOrg({ cx, org }) {
     if (!this.config) return;
     const next = setOrg({ config: this.config, org });
@@ -402,11 +402,16 @@ export class OncallSettings {
     this.switching = "idle";
     if (r.status === "success") {
       this.config = r.config;
-      notify({ title: isOn ? "You are on call" : "Off call", body: isOn ? "Sentry is checked in the background." : "No more checks or alerts.", level: "info" });
+      notify({ title: isOn ? "You are on call" : "Off call", body: isOn ? `${this.tracker.name} is checked in the background.` : "No more checks or alerts.", level: "info" });
     } else {
       notify({ title: isOn ? "Could not start On-call" : "Could not stop On-call", body: r.message, level: "warning" });
     }
     await this.refreshStatus(cx);
+  }
+
+  // The issue tracker the setup is for: names, token help and labels (providers/catalog.js).
+  get tracker() {
+    return getProvider(this.config?.provider);
   }
 
   // ---------- view ----------
@@ -415,6 +420,7 @@ export class OncallSettings {
   groups() {
     const config = this.config;
     if (!config) return [div().text_size(12).text_color(theme().dim).child("Loading…")];
+    const tracker = this.tracker;
     const isConnected = this.account.status === "connected";
     const group = this.host.settingsGroup;
     const advanced = [
@@ -423,15 +429,15 @@ export class OncallSettings {
       group({ title: "Never notify me for…", description: "Checked before the rules above. A match never notifies you.", children: this.ruleRows({ config, list: "neverRules" }) }),
       this.sectionTitle("Checks"),
       group({
-        title: "Sentry priority for AI", description: "Issues with another Sentry priority skip the AI and never notify you.",
+        title: `${tracker.priorityLabel} for AI`, description: `Issues with another ${tracker.priorityLabel} skip the AI and never notify you.`,
         children: [this.settingSelect({
-          select: "priorities", title: "Sentry priority for AI", isMulti: true, value: config.aiPriorities,
-          options: SENTRY_PRIORITIES.map((p) => ({ value: p, label: capitalize(p) }))
+          select: "priorities", title: `${tracker.priorityLabel} for AI`, isMulti: true, value: config.aiPriorities,
+          options: PRIORITIES.map((p) => ({ value: p, label: capitalize(p) }))
         })],
       }),
       group({ title: "Environments", description: "Only events from these environments, comma separated. Empty: all of them.", children: [this.textField({ id: "environments", input: this.envInput })] }),
       group({
-        title: "Check every", description: "How often the service asks Sentry. A change applies after the next check.",
+        title: "Check every", description: `How often the service asks ${tracker.name}. A change applies after the next check.`,
         children: [this.settingSelect({
           select: "poll", title: "Check every", isMulti: false, value: [String(config.pollMinutes)],
           options: POLL_MINUTES.map((m) => ({ value: String(m), label: m === 1 ? "1 minute" : `${m} minutes` }))
@@ -448,14 +454,14 @@ export class OncallSettings {
     // Setup shows one step at a time: a step appears once the one before it is done, and the
     // rest of the settings once all of them are.
     const missing = getMissingSetup({ config, hasToken: isConnected });
-    /** @param {import("./oncall-config.js").SetupStep} step */
+    /** @param {import("./config.js").SetupStep} step */
     const isReached = (step) => missing === null || SETUP_STEPS.indexOf(step) <= SETUP_STEPS.indexOf(missing);
     const setup = [
-      group({ title: "Sentry token", description: "A personal token with org:read, project:read and event:read. It stays on this machine, readable only by you.", children: this.tokenRows() }),
-      ...(isReached("org") ? [group({ title: "Organization", description: "The Sentry organization to watch.", children: this.orgRows(config) })] : []),
-      ...(isReached("projects") ? [group({ title: "Projects", description: "Only these projects' issues reach you.", children: this.projectRows(config) })] : []),
+      group({ title: `${tracker.name} token`, description: `${tracker.token.help} It stays on this machine, readable only by you.`, children: this.tokenRows() }),
+      ...(isReached("org") ? [group({ title: tracker.orgLabel, description: `The ${tracker.name} ${tracker.orgLabel.toLowerCase()} to watch.`, children: this.orgRows(config) })] : []),
+      ...(isReached("projects") ? [group({ title: tracker.projectsLabel, description: `Only these ${tracker.projectsLabel.toLowerCase()}' issues reach you.`, children: this.projectRows(config) })] : []),
       ...(isReached("repo") ? [group({ title: "Repo", description: "The checkout you are on call for: the AI reads it to find the cause and owner, and Continue in Claude opens there.", children: this.repoRows(config) })] : []),
-      ...(isReached("domain") && config.codeFolder ? [group({ title: "Repo profile", description: "What the scan learned: CODEOWNERS and Sentry noise rules read exactly, and a short AI summary. Every triage reads it.", children: this.profileRows(config) })] : []),
+      ...(isReached("domain") && config.codeFolder ? [group({ title: "Repo profile", description: "What the scan learned: CODEOWNERS and the noise rules of your ${tracker.setupScan.sdkName} setup read exactly, and a short AI summary. Every triage reads it.", children: this.profileRows(config) })] : []),
       ...(isReached("domain") ? [group({
         title: "My domain",
         description: `What you are on call for. Before the full triage, a quick ${capitalize(DOMAIN_MODEL)} check (about a cent) drops issues outside it, so other teams' errors never nudge you.`,
@@ -470,7 +476,7 @@ export class OncallSettings {
       ];
     }
     return [
-      group({ title: "On call", description: "While on, Sentry is checked in the background, even with Herdr closed.", children: this.switchRows(config) }),
+      group({ title: "On call", description: `While on, ${tracker.name} is checked in the background, even with Herdr closed.`, children: this.switchRows(config) }),
       ...setup,
       this.sectionTitle("AI"),
       group({ title: "Triage skill", description: "The skill that guides the AI's investigation. The default, oncall-triage, ships with gh44-herdr; pick any of your own instead.", children: [this.triageSkillSelect(config)] }),
@@ -519,14 +525,14 @@ export class OncallSettings {
       .on_click((_e, cx) => { this.isAdvancedOpen = !this.isAdvancedOpen; cx.notify(); })
       .child(svg(icon(this.isAdvancedOpen ? "chevron" : "chevron-right")).size(12).text_color(t.muted))
       .child(div().flex_1().child("Advanced"))
-      .child(div().text_size(11.5).text_color(t.dim).child("rules, Sentry priority, environments, timing"));
+      .child(div().text_size(11.5).text_color(t.dim).child("rules, priority, environments, timing"));
   }
 
   // [Preview next check] and its answer: how many issues, what the AI would look at, what is filtered.
   previewRows() {
     const t = theme();
     const preview = this.preview;
-    const button = this.button({ id: "oncall-preview", label: preview.status === "loading" ? "Checking Sentry…" : "Preview next check", onClick: (cx) => this.handlePreview(cx) });
+    const button = this.button({ id: "oncall-preview", label: preview.status === "loading" ? `Checking ${this.tracker.name}…` : "Preview next check", onClick: (cx) => this.handlePreview(cx) });
     const head = h_flex().gap(8).items_center()
       .child(div().flex_1().min_w(0).text_size(11.5).text_color(preview.status === "failed" ? palette(t).warning : t.dim)
         .child(preview.text ?? "See what a check would do, without running the AI."))
@@ -614,12 +620,12 @@ export class OncallSettings {
     /** @param {number} n @param {string} word */
     const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
     const status = (() => {
-      if (isScanning) return "Scanning: reading CODEOWNERS and the Sentry setup, then a short Haiku read of the repo. About a minute.";
+      if (isScanning) return `Scanning: reading CODEOWNERS and the ${this.tracker.setupScan.sdkName} setup, then a short Haiku read of the repo. About a minute.`;
       if (this.scan.status === "failed") return `Scan failed: ${this.scan.message ?? "unknown error"}`;
       if (!profile) return "Not scanned yet.";
       const owners = profile.codeowners ? count(profile.codeowners.split("\n").length, "CODEOWNERS line") : "no CODEOWNERS";
       const cost = profile.costUsd === null ? "" : ` · $${profile.costUsd.toFixed(3)}`;
-      return `Scanned ${formatRelative(profile.scannedAt) ?? profile.scannedAt.slice(0, 10)} · ${owners} · ${count(profile.ignoreErrors.length, "ignored error")} · ${count(profile.denyUrls.length, "denied URL")}${cost}`;
+      return `Scanned ${formatRelative(profile.scannedAt) ?? profile.scannedAt.slice(0, 10)} · ${owners} · ${count(Object.values(profile.noiseRules).flat().length, "noise rule")}${cost}`;
     })();
     const statusRow = h_flex().gap(8).items_center()
       .when(isScanning, (el) => el.child(svg(SPINNER).size(12).flex_none().text_color(t.working).spin(900)))
@@ -647,7 +653,7 @@ export class OncallSettings {
   }
 
   // The first lines of a long text, with "+N more lines" and an Edit button that opens it in a dialog.
-  /** @param {{ id: string, text: string, isMono: boolean, field: import("./oncall-text-dialog.js").OncallTextField }} params */
+  /** @param {{ id: string, text: string, isMono: boolean, field: import("./text-dialog.js").OncallTextField }} params */
   textPreview({ id, text, isMono, field }) {
     const t = theme();
     const lines = text.split("\n").filter((l) => l.trim());
@@ -800,7 +806,7 @@ export class OncallSettings {
   }
 
   // A rules list: on/off, the rule and ✕; then the field to add one, and suggestions not added yet.
-  /** @param {{ config: OncallConfig, list: import("./oncall-config.js").RuleList }} params */
+  /** @param {{ config: OncallConfig, list: import("./config.js").RuleList }} params */
   ruleRows({ config, list }) {
     const t = theme();
     const input = list === "nudgeRules" ? this.nudgeInput : this.neverInput;
@@ -827,7 +833,7 @@ export class OncallSettings {
     return [...rows, field, ...(suggestions.length ? [chips] : [])];
   }
 
-  /** @param {{ cx: import("gpui-kit").Context, list: import("./oncall-config.js").RuleList, text: string }} params */
+  /** @param {{ cx: import("gpui-kit").Context, list: import("./config.js").RuleList, text: string }} params */
   handleAddRule({ cx, list, text }) {
     if (!this.config || !text.trim()) return;
     const id = `${list === "nudgeRules" ? "nudge" : "never"}-${Date.now().toString(36)}`;
@@ -868,14 +874,14 @@ export class OncallSettings {
       .when(isBusy, (el) => el.child(svg(SPINNER).size(12).text_color(t.working).spin(900)))
       .when(!isBusy && !isDisabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.spawn(async (cx) => this.switchOncall({ cx, isOn: !isRunning })); }))
-      .when(isDisabled && missing !== null, (el) => el.tooltip(MISSING_SETUP[/** @type {import("./oncall-config.js").SetupStep} */ (missing)]))
+      .when(isDisabled && missing !== null, (el) => el.tooltip(MISSING_SETUP[/** @type {import("./config.js").SetupStep} */ (missing)]))
       .child(isBusy ? (this.switching === "starting" ? "Starting…" : "Stopping…") : isRunning ? "Go off call" : "Go on call");
     const rows = [h_flex().h(30).px(6).gap(8).items_center()
       .child(div().size(8).flex_none().rounded(4).bg(dot))
       .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(summary))
       .child(button)];
     if (service?.lastError && isRunning) {
-      const hint = service.lastError.reason === "auth" ? "Sentry turned the token down. Save a new one below." : service.lastError.message;
+      const hint = service.lastError.reason === "auth" ? `${this.tracker.name} turned the token down. Save a new one below.` : service.lastError.message;
       rows.push(div().px(6).text_size(11.5).text_color(colors.warning).child(`Last check failed: ${hint}`));
     }
     if (missing && !isRunning) rows.push(div().px(6).text_size(11.5).text_color(t.dim).child(MISSING_SETUP[missing]));
@@ -886,12 +892,12 @@ export class OncallSettings {
   tokenRows() {
     const t = theme();
     const account = this.account;
-    if (account.status === "checking" || account.status === "idle") return [div().px(6).text_size(12).text_color(t.dim).child("Checking the Sentry token…")];
+    if (account.status === "checking" || account.status === "idle") return [div().px(6).text_size(12).text_color(t.dim).child(`Checking the ${this.tracker.name} token…`)];
     if (account.status === "connected") {
       return [h_flex().h(28).px(6).gap(8).items_center()
         .child(div().size(7).rounded(4).bg(palette(t).success))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(account.user ? `Connected as ${account.user}` : "Connected"))
-        .child(div().id("sentry-token-remove").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
+        .child(div().id("tracker-token-remove").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
           .text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => this.handleRemoveToken(cx))
           .child("Remove"))];
@@ -900,24 +906,24 @@ export class OncallSettings {
     return [...note, this.tokenField()];
   }
 
-  // [token ••••• | Save], Sentry's answer when it turns a token down, and where to make one.
+  // [token ••••• | Save], the tracker's answer when it turns a token down, and where to make one.
   tokenField() {
     const t = theme();
     const isSaving = this.tokenSave.status === "saving";
-    const saveButton = h_flex().id("sentry-token-save").h_full().px(10).gap(6).items_center().flex_none().text_size(12)
+    const saveButton = h_flex().id("tracker-token-save").h_full().px(10).gap(6).items_center().flex_none().text_size(12)
       .bg(t.raised).text_color(isSaving ? t.muted : t.foreground)
       .when(!isSaving, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleSaveToken(cx)))
       .when(isSaving, (el) => el.child(svg(SPINNER).size(12).text_color(t.working).spin(900)))
       .child(isSaving ? "Checking…" : "Save");
     return v_flex().flex_none().gap(6).on_mouse_down("left", stop)
-      .child(h_flex().h(30).items_center().rounded(6).border(1).border_color(this.host.isFocused("sentryToken") ? t.accent : t.input).bg(t.background).overflow_hidden()
+      .child(h_flex().h(30).items_center().rounded(6).border(1).border_color(this.host.isFocused("trackerToken") ? t.accent : t.input).bg(t.background).overflow_hidden()
         .child(h_flex().flex_1().min_w(0).px(8).items_center().child(Input.new(this.tokenInput).flex_1().text_size(12).text_color(t.foreground)))
         .child(div().w(1).h_full().bg(t.border))
         .child(saveButton))
       .when(this.tokenSave.status === "failed", (el) => el.child(div().text_size(11.5).text_color(palette(t).danger).child(this.tokenSave.message ?? "")))
-      .child(h_flex().id("sentry-token-link").gap(4).items_center().text_size(11.5).text_color(t.accent).cursor_pointer()
-        .on_click((_e, cx) => cx.open_url(SENTRY_TOKENS_URL))
-        .child("Create a token in Sentry: Settings › Personal Tokens"));
+      .child(h_flex().id("tracker-token-link").gap(4).items_center().text_size(11.5).text_color(t.accent).cursor_pointer()
+        .on_click((_e, cx) => cx.open_url(this.tracker.token.createUrl))
+        .child(this.tracker.token.createLabel));
   }
 
   /** @param {OncallConfig} config */

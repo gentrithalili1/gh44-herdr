@@ -1,6 +1,29 @@
+<div align="center">
+
+<img src="docs/logo.png" alt="gh44-herdr logo" width="128">
+
 # gh44-herdr
 
-A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, gh44 mods.
+**One window for tickets, code and the agents that work on them.**
+
+A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings and gh44 mods.
+
+[![Herdr](https://img.shields.io/badge/Herdr-app-5b5bd6)](https://herdr.dev)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-skills-d97757)](https://claude.com/claude-code)
+[![Tests](https://img.shields.io/badge/tests-node_--test-3c873a)](tests)
+
+[Features](#features) · [Install](#install) · [Screenshots](#screenshots) · [What's here](#whats-here)
+
+<img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="320">
+
+</div>
+
+## Features
+
+- **Work panel:** your Linear tickets and GitHub PRs, each with a skill that runs as an agent in the right worktree.
+- **On-call:** watches Sentry and notifies you only about issues in your domain, with an AI report and a fix.
+- **Repo skills:** a repo's own skills show up while you work in it.
+- **gh44 extras:** the gh44-brain skills and the gh44 themes, one click away.
 
 ## Work panel
 
@@ -11,6 +34,10 @@ The layout's **Work panel** (the `hub` mod) lists your tickets and PRs. Each row
 Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
 
 A repo can bring its own skills. With a terminal in the repo focused, **+ Add skill** also lists the repo's `.claude/skills` and `.claude/commands/*.md`, tagged with the repo's name. Rows offer a repo skill, its key and its case default only while that repo is focused.
+
+## On-call
+
+The **On-call** tab watches Sentry in the background and notifies you only about issues in your domain, each with an AI report and a suggested fix. Set it up in ⚙ settings › On-call. See [mods/hub/oncall](mods/hub/oncall/README.md).
 
 ## Community mods
 
@@ -67,4 +94,5 @@ To remove it:
   <img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="240">
   <img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="240">
   <img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="240">
+  <img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
 </p>

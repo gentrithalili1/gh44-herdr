@@ -1,13 +1,14 @@
 // What the service does with each alert: which ones to look at, the free filters, the prompt
 // for the AI and reading its verdict back. Pure, so tests/ can load it.
 
-import { BUILT_IN_TRIAGE_SKILL } from "../oncall-config.js";
+import { BUILT_IN_TRIAGE_SKILL } from "../config.js";
 import { formatRepoContext } from "./repo-scan.mjs";
+import { getProvider } from "../providers/catalog.js";
 
-/** @typedef {import("../oncall-config.js").OncallConfig} OncallConfig */
-/** @typedef {import("../oncall-config.js").Severity} Severity */
-/** @typedef {import("./alerts.mjs").Alert} Alert */
-/** @typedef {import("./alerts.mjs").EventContext} EventContext */
+/** @typedef {import("../config.js").OncallConfig} OncallConfig */
+/** @typedef {import("../config.js").Severity} Severity */
+/** @typedef {import("../providers/contract.js").Alert} Alert */
+/** @typedef {import("../providers/contract.js").EventContext} EventContext */
 /** @typedef {"new" | "regressed" | "escalating" | "grew" | "rerun"} Trigger */
 /** @typedef {"priority" | "impact" | "domain" | "ai" | "failed"} Stage */
 /** @typedef {"reported" | "ignored" | "held" | "failed"} Outcome */
@@ -70,7 +71,7 @@ export function selectWork({ alerts, decisions, now, hours }) {
 export function runFreeFilters({ alert, trigger, config }) {
   if (trigger === "rerun") return null;
   if (alert.priority && !config.aiPriorities.includes(/** @type {any} */ (alert.priority))) {
-    return { stage: "priority", outcome: "ignored", summary: `Sentry priority ${alert.priority}; the AI looks at ${config.aiPriorities.join(", ")}` };
+    return { stage: "priority", outcome: "ignored", summary: `${getProvider(config.provider).priorityLabel} ${alert.priority}; the AI looks at ${config.aiPriorities.join(", ")}` };
   }
   if ((trigger === "new" || trigger === "grew") && isBelowImpact(alert)) {
     return { stage: "impact", outcome: "held", summary: `Waiting for impact: ${alert.count} event${alert.count === 1 ? "" : "s"}, ${alert.userCount} user${alert.userCount === 1 ? "" : "s"}` };
@@ -78,7 +79,7 @@ export function runFreeFilters({ alert, trigger, config }) {
   return null;
 }
 
-/** @param {import("../oncall-config.js").Rule[]} rules */
+/** @param {import("../config.js").Rule[]} rules */
 const formatRules = (rules) => {
   const on = rules.filter((r) => r.isOn);
   return on.length ? on.map((r) => `- ${r.text}`).join("\n") : "- (none)";
@@ -86,11 +87,12 @@ const formatRules = (rules) => {
 
 // What every triage must do, whichever skill guides the investigation: stay read only, apply
 // the engineer's domain and rules, and end with the verdict line the service reads.
-const INSTRUCTIONS = `You triage one Sentry issue for an on-call engineer. Answer one question: does this person need to act on it now?
+/** @param {string} tracker */
+const getInstructions = (tracker) => `You triage one ${tracker} issue for an on-call engineer. Answer one question: does this person need to act on it now?
 
 Rules:
-- You run unattended. Read only: never change anything in Sentry, never post anywhere, never edit files.
-- Never invent counts, users or releases. Use the data below, or the Sentry tools if you have them.
+- You run unattended. Read only: never change anything in ${tracker}, never post anywhere, never edit files.
+- Never invent counts, users or releases. Use the data below, or the ${tracker} tools if you have them.
 - Be fast. Fetch only what changes the answer.
 
 Does it match:
@@ -110,11 +112,12 @@ const formatFrames = (context) => (context?.frames.length
 /** @param {EventContext | null} context */
 const formatTags = (context) => (context && Object.keys(context.tags).length ? Object.entries(context.tags).map(([k, v]) => `- ${k}: ${v}`).join("\n") : "- (none)");
 
-const DOMAIN_INSTRUCTIONS = `You decide one thing: is this Sentry issue in the on-call engineer's domain? Answer from the data below only; you have no tools.
+/** @param {string} tracker */
+const getDomainInstructions = (tracker) => `You decide one thing: is this ${tracker} issue in the on-call engineer's domain? Answer from the data below only; you have no tools.
 
 Judge ownership only, not whether the error is real, noise, a browser quirk or third-party: that is decided later. An issue in an app or folder of the domain is yes, whatever its cause.
 
-Map the stack frames, culprit, URL and transaction to the domain. Paths in Sentry often carry a build prefix (app:///, webpack://, _next/static, ./): match on the meaningful part, like the app and module folder. Shared code (packages, an app shell) that breaks a feature in the domain counts as yes. When nothing ties it to the domain or to another one, say unclear.
+Map the stack frames, culprit, URL and transaction to the domain. Paths in ${tracker} often carry a build prefix (app:///, webpack://, _next/static, ./): match on the meaningful part, like the app and module folder. Shared code (packages, an app shell) that breaks a feature in the domain counts as yes. When nothing ties it to the domain or to another one, say unclear.
 
 Answer with one line, nothing else:
 ${DOMAIN_MARKER} {"mine":"<yes|no|unclear>","reason":"<one short sentence naming the path or area that decided it>"}`;
@@ -122,7 +125,7 @@ ${DOMAIN_MARKER} {"mine":"<yes|no|unclear>","reason":"<one short sentence naming
 // The cheap "is this mine?" check, before the full triage.
 /** @param {{ config: OncallConfig, alert: Alert, context: EventContext | null }} params */
 export function buildDomainPrompt({ config, alert, context }) {
-  return `${DOMAIN_INSTRUCTIONS}
+  return `${getDomainInstructions(getProvider(config.provider).name)}
 
 ## The engineer's domain
 ${config.domain}
@@ -167,6 +170,7 @@ const getGuide = ({ config, builtInGuide }) => {
 
 /** @param {{ config: OncallConfig, alert: Alert, context: EventContext | null, trigger: Trigger, domainVerdict?: DomainVerdict | null, builtInGuide?: string }} params */
 export function buildPrompt({ config, alert, context, trigger, domainVerdict = null, builtInGuide = "" }) {
+  const provider = getProvider(config.provider);
   const frames = formatFrames(context);
   const tags = formatTags(context);
   const domain = config.domain
@@ -174,11 +178,11 @@ export function buildPrompt({ config, alert, context, trigger, domainVerdict = n
     : "";
   const issue = [
     `Short id: ${alert.shortId}`, `Title: ${alert.title}`, `Message: ${context?.message || "(none)"}`, `Culprit: ${alert.culprit || "(none)"}`,
-    `Project: ${alert.project}`, `Level: ${alert.level}`, `Sentry priority: ${alert.priority ?? "unknown"}`, `Status: ${alert.kind}`,
+    `Project: ${alert.project}`, `Level: ${alert.level}`, `${provider.priorityLabel}: ${alert.priority ?? "unknown"}`, `Status: ${alert.kind}`,
     `Why now: ${trigger}`, `Events: ${alert.count}`, `Users: ${alert.userCount}`, `First seen: ${alert.firstSeen}`, `Last seen: ${alert.lastSeen}`,
     `Unhandled: ${alert.isUnhandled ? "yes" : "no"}`, `Link: ${alert.url}`,
   ].join("\n");
-  return `${getGuide({ config, builtInGuide })}${INSTRUCTIONS}
+  return `${getGuide({ config, builtInGuide })}${getInstructions(provider.name)}
 
 ## Nudge me when
 ${formatRules(config.nudgeRules)}

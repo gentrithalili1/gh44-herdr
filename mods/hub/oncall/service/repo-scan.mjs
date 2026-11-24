@@ -1,17 +1,17 @@
-// The repo scan at setup: what code reads exactly (CODEOWNERS, the Sentry setup's ignoreErrors
-// and denyUrls), the prompt for the short AI read of the rest, and how the result goes into a
-// triage prompt. Pure, so tests/ can load it.
+// The repo scan at setup: what code reads exactly (CODEOWNERS, the noise rules in the tracker
+// SDK's setup, like Sentry's ignoreErrors), the prompt for the short AI read of the rest, and how
+// the result goes into a triage prompt. Pure, so tests/ can load it.
 
-/** @typedef {import("../oncall-config.js").RepoProfile} RepoProfile */
-/** @typedef {{ codeowners: string, codeownersPath: string | null, sentryFiles: string[], ignoreErrors: string[], denyUrls: string[], spreads: string[] }} RepoFacts */
+/** @typedef {import("../config.js").RepoProfile} RepoProfile */
+/** @typedef {import("../providers/catalog.js").Provider} Provider */
+// noiseRules: each noise key of the provider's SDK setup (ignoreErrors, denyUrls…) and its patterns.
+/** @typedef {{ codeowners: string, codeownersPath: string | null, setupFiles: string[], noiseRules: Record<string, string[]>, spreads: string[] }} RepoFacts */
 
 export const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
-// Files that set up Sentry: found with git grep, test files left out.
-export const SENTRY_FILE_PATTERN = "Sentry\\.init|ignoreErrors|denyUrls";
-export const MAX_SENTRY_FILES = 12;
+// The SDK setup files read, at most: found with the provider's git grep pattern, tests left out.
+export const MAX_SETUP_FILES = 12;
 const MAX_CODEOWNERS_LINES = 300;
 const MAX_PATTERNS = 200;
-const NOISE_KEYS = /** @type {const} */ (["ignoreErrors", "denyUrls"]);
 
 // CODEOWNERS without comments and blank lines, cut to MAX_CODEOWNERS_LINES.
 /** @param {string} text */
@@ -57,14 +57,15 @@ export function extractArrayPatterns({ source, key }) {
   return { patterns, spreads };
 }
 
-// The noise rules of the Sentry setup files, each pattern once.
-/** @param {{ path: string, source: string }[]} files @returns {Pick<RepoFacts, "ignoreErrors" | "denyUrls" | "spreads">} */
-export function collectNoiseRules(files) {
-  /** @type {Record<"ignoreErrors" | "denyUrls", string[]>} */
-  const found = { ignoreErrors: [], denyUrls: [] };
+// The noise rules of the SDK setup files under each key, each pattern once.
+/** @param {{ files: { path: string, source: string }[], keys: readonly string[] }} params @returns {Pick<RepoFacts, "noiseRules" | "spreads">} */
+export function collectNoiseRules({ files, keys }) {
+  /** @type {Record<string, string[]>} */
+  const found = {};
+  for (const key of keys) found[key] = [];
   const spreads = [];
   for (const file of files) {
-    for (const key of NOISE_KEYS) {
+    for (const key of keys) {
       const r = extractArrayPatterns({ source: file.source, key });
       found[key].push(...r.patterns);
       spreads.push(...r.spreads);
@@ -72,17 +73,18 @@ export function collectNoiseRules(files) {
   }
   /** @param {string[]} list */
   const unique = (list) => [...new Set(list.filter(Boolean))].slice(0, MAX_PATTERNS);
-  return { ignoreErrors: unique(found.ignoreErrors), denyUrls: unique(found.denyUrls), spreads: unique(spreads) };
+  return { noiseRules: Object.fromEntries(keys.map((key) => [key, unique(found[key])])), spreads: unique(spreads) };
 }
 
 /** @param {string[]} list */
 const bullets = (list) => (list.length ? list.map((x) => `- ${x}`).join("\n") : "- (none)");
 
-const SCAN_INSTRUCTIONS = `You prepare an on-call engineer's repo profile. Another AI reads it before it triages every Sentry issue from this repo, so it must say what decides ownership, severity and noise. You run inside the repo.
+/** @param {Provider} provider */
+const getScanInstructions = (provider) => `You prepare an on-call engineer's repo profile. Another AI reads it before it triages every ${provider.name} issue from this repo, so it must say what decides ownership, severity and noise. You run inside the repo.
 
 Rules:
 - Read only. Never edit files, never run anything that changes the repo.
-- Be fast: list the top folders, read the workspace config (package.json workspaces, pnpm-workspace.yaml, nx or turbo config), the Sentry setup files below and what they spread in. Don't read the whole codebase.
+- Be fast: list the top folders, read the workspace config (package.json workspaces, pnpm-workspace.yaml, nx or turbo config), the ${provider.setupScan.sdkName} setup files below and what they spread in. Don't read the whole codebase.
 - Never invent paths or teams. Use what you read and the CODEOWNERS below.
 
 Write markdown, at most 400 words, with exactly these sections:
@@ -97,15 +99,16 @@ The flows that block users when broken (login, signup, checkout, payment, publis
 Files that report other code's errors and so are never the cause (GraphQL error links, HTTP interceptors, error boundaries, global handlers), each with what to look at instead. A micro-frontend host whose project collects remote apps' errors goes here too.
 
 ## Noise already filtered
-What the Sentry setup drops, in plain words, including the spread constants listed below once resolved.
+What the ${provider.setupScan.sdkName} setup drops, in plain words, including the spread constants listed below once resolved.
 
 ## Ownership notes
 Anything that makes ownership tricky: shared packages, generated code, code moved between teams.`;
 
 // The prompt for the AI part of the scan: the facts code read, then what to find out.
-/** @param {{ folder: string, facts: RepoFacts }} params */
-export function buildScanPrompt({ folder, facts }) {
-  return `${SCAN_INSTRUCTIONS}
+/** @param {{ folder: string, facts: RepoFacts, provider: Provider }} params */
+export function buildScanPrompt({ folder, facts, provider }) {
+  const noise = Object.entries(facts.noiseRules).map(([key, patterns]) => `## ${key} found\n${bullets(patterns)}`).join("\n\n");
+  return `${getScanInstructions(provider)}
 
 ## Repo
 ${folder}
@@ -113,14 +116,10 @@ ${folder}
 ## CODEOWNERS${facts.codeownersPath ? ` (${facts.codeownersPath})` : ""}
 ${facts.codeowners || "(none found)"}
 
-## Sentry setup files
-${bullets(facts.sentryFiles)}
+## ${provider.setupScan.sdkName} setup files
+${bullets(facts.setupFiles)}
 
-## ignoreErrors found
-${bullets(facts.ignoreErrors)}
-
-## denyUrls found
-${bullets(facts.denyUrls)}
+${noise}
 
 ## Spread into them (resolve these)
 ${bullets(facts.spreads)}
@@ -131,8 +130,9 @@ ${bullets(facts.spreads)}
 /** @param {RepoProfile | null} profile */
 export function formatRepoContext(profile) {
   if (!profile) return "";
-  const noise = profile.ignoreErrors.length || profile.denyUrls.length
-    ? `\n## Sentry noise rules in the repo\nignoreErrors:\n${bullets(profile.ignoreErrors)}\ndenyUrls:\n${bullets(profile.denyUrls)}\n`
+  const rules = Object.entries(profile.noiseRules).filter(([, patterns]) => patterns.length);
+  const noise = rules.length
+    ? `\n## Noise rules in the repo's SDK setup\n${rules.map(([key, patterns]) => `${key}:\n${bullets(patterns)}`).join("\n")}\n`
     : "";
   return `
 ## Repo profile (${profile.folder}, scanned ${profile.scannedAt.slice(0, 10)})

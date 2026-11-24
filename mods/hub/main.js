@@ -19,10 +19,10 @@ import { icon, palette, stop, toAnchor, MONO_FONT, GUTTER } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
-import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall-text-dialog.js";
-import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall.js";
-import { OncallView, ReportView, oncallMenuRows } from "./oncall-view.js";
-import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall-decisions.js";
+import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall/text-dialog.js";
+import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall/client.js";
+import { OncallView, ReportView, oncallMenuRows } from "./oncall/view.js";
+import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall/decisions.js";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getCaseActions, getTicketSkills,
   getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills, getTabOrder, moveTab, ASK_ACTION, ASK_DESCRIPTION,
