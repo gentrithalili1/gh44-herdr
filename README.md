@@ -1,13 +1,13 @@
-<div align="center">
+<p align="center">
+  <img src="docs/gh44-omnia-logo.png" alt="gh44-omnia" width="200">
+</p>
 
-<img src="docs/gh44-omnia-logo.png" alt="gh44-omnia logo" width="180">
+<h1 align="center">gh44-omnia</h1>
 
-# gh44-omnia
-
-**Your tickets, your code and the agents that work on them, in one Herdr window.**<br>
-**Pick a ticket, start a skill, and watch the agent do it in the right worktree.**
-
-</div>
+<p align="center">
+  <strong>Your tickets, your code and the agents that work on them, in one Herdr window.</strong><br>
+  <strong>Pick a ticket, start a skill, and watch the agent do it in the right worktree.</strong>
+</p>
 
 You jump between Linear, GitHub, a terminal per repo and a Claude tab per task, and you lose track of what runs where. gh44-omnia is a setup for the [Herdr app](https://herdr.dev) that puts it all in one layout. The **Work panel** lists your Linear tickets and GitHub PRs; each row starts its skill as a Claude agent in the ticket's worktree and shows how it goes. The **On-call** tab watches Sentry while you are on call and only tells you about the issues in your domain, with an AI report and a suggested fix. Repo skills, the gh44 themes and the gh44-brain skills are one click away.
 
