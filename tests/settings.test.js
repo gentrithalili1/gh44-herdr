@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import {
   getSettings, getDefaultSkill, OPEN_ENTRY, getGithubSituation, getLinearSituation, getSkillRole, getTicketSkills, getTabSkills, getKeySkills, getKeyHints,
   addSkill, removeSkill, moveCaseEntry, setSkillKey, setCaseHidden, getCaseActions, hasNoDefaults, isValidSkillName,
-  getWhereToRun, getShownTab, getGh44Setup, isUsingGh44Setup, countInstalledSkills, getRunnableSkills, getAskPrompt, canRun, canRunEntry, ASK_ACTION,
+  getWhereToRun, getShownTab, getGh44Setup, getOncallSituation, isUsingGh44Setup, countInstalledSkills, getRunnableSkills, getAskPrompt, canRun, canRunEntry, ASK_ACTION,
+  getTabOrder, moveTab,
 } from "../mods/hub/settings.js";
 
 // What dragging a skill (null: Open) to the top of a case and checking it does: it becomes the default.
@@ -351,10 +352,10 @@ test("the gh44 setup shows as in use once saved, and not after an edit or on a f
   assert.equal(isUsingGh44Setup({ skills: getSettings({ saved: undefined, installedSkills: ["gh44-plan"] }).skills }), false);
 });
 
-test("the setup counts each of its 6 skills once against what is installed", () => {
+test("the setup counts each of its 7 skills once (On-call adds gh44-debug) against what is installed", () => {
   const skills = getGh44Setup();
-  assert.deepEqual(countInstalledSkills({ skills, installedSkills: ["gh44-plan", "gh44-code-review", "other"] }), { installed: 2, total: 6 });
-  assert.deepEqual(countInstalledSkills({ skills, installedSkills: [] }), { installed: 0, total: 6 });
+  assert.deepEqual(countInstalledSkills({ skills, installedSkills: ["gh44-plan", "gh44-code-review", "other"] }), { installed: 2, total: 7 });
+  assert.deepEqual(countInstalledSkills({ skills, installedSkills: [] }), { installed: 0, total: 7 });
 });
 
 test("rows skip saved skills that are not installed, and keep plugin skills", () => {
@@ -393,7 +394,7 @@ test("a repo skill needs its repo's .claude to still have it; an unlisted repo k
 
 test("repo skills don't count toward the installed gh44 skills", () => {
   const added = addSkill({ skills: getGh44Setup(), tab: "github", skill: "deploy-preview", repo: "acme/web" });
-  assert.deepEqual(countInstalledSkills({ skills: added, installedSkills: [] }), { installed: 0, total: 6 });
+  assert.deepEqual(countInstalledSkills({ skills: added, installedSkills: [] }), { installed: 0, total: 7 });
 });
 
 test("a case's order is its menu's, and its first shown entry is the default; Open first opens it", () => {
@@ -416,4 +417,32 @@ test("hiding a case's default makes its next shown entry the default, and the or
   const moved = moveCaseEntry({ skills: hidden, tab: "github", situation: "othersPullRequest", entry: ASK_ACTION, to: 0 });
   const { skills: saved } = getSettings({ saved: { skills: moved } });
   assert.deepEqual(saved.github.cases.othersPullRequest, moved.github.cases.othersPullRequest);
+});
+
+test("On-call rows: a case per need, Continue and Ask built in, and the report opens by default", () => {
+  const { skills } = getSettings({ saved: undefined });
+  assert.deepEqual(skills.oncall.list.map((e) => e.name), ["continue", "gh44-debug", "ask"]);
+  assert.equal(getOncallSituation({ outcome: "reported", stage: "ai", severity: "critical", isNotified: true }), "critical");
+  assert.equal(getOncallSituation({ outcome: "reported", stage: "ai", severity: "high", isNotified: true }), "high");
+  assert.equal(getOncallSituation({ outcome: "reported", stage: "ai", severity: "medium", isNotified: false }), "needsYou");
+  assert.equal(getOncallSituation({ outcome: "ignored", stage: "ai", severity: "low", isNotified: false }), "notForYou");
+  assert.equal(getOncallSituation({ outcome: "ignored", stage: "domain", severity: null, isNotified: false }), "filtered");
+  assert.equal(getOncallSituation({ outcome: "failed", stage: "failed", severity: null, isNotified: false }), "failed");
+  assert.equal(getDefaultSkill({ skills, tab: "oncall", situation: "critical" }), null);
+  assert.deepEqual(removeSkill({ skills, tab: "oncall", skill: "continue" }), skills);
+});
+
+test("a saved On-call list from before Continue gets it back", () => {
+  const { skills } = getSettings({ saved: { skills: { oncall: { list: [{ name: "gh44-debug", key: "c" }] } } } });
+  assert.deepEqual(skills.oncall.list, [{ name: "gh44-debug", key: "c" }, { name: "ask", key: "q" }, { name: "continue", key: null }]);
+});
+
+test("the header tab order keeps known tabs once, adds missing ones, and moves a dropped tab", () => {
+  assert.deepEqual(getTabOrder(undefined), ["github", "linear", "oncall"]);
+  assert.deepEqual(getTabOrder(["oncall", "nope", "github", "oncall"]), ["oncall", "github", "linear"]);
+  const order = ["github", "linear", "oncall"];
+  assert.deepEqual(moveTab({ order, tab: "oncall", to: 0 }), ["oncall", "github", "linear"]);
+  assert.deepEqual(moveTab({ order, tab: "github", to: 3 }), ["linear", "oncall", "github"]);
+  assert.deepEqual(moveTab({ order, tab: "linear", to: 1 }), order);
+  assert.deepEqual(moveTab({ order, tab: "linear", to: 2 }), order);
 });

@@ -14,10 +14,10 @@ import { getDefaultSkill, setCaseHidden, moveCaseEntry, shortSkill, shortRepo, O
 // The drop line sits in the 4px gap between entry rows: 3px out, 2px tall.
 const DROP_LINE_OFFSET = -3;
 const UNCHECKED_OPACITY = 0.45;
-const OPEN_LABEL = { github: "Open in GitHub", linear: "Open in Linear" };
+const OPEN_LABEL = { github: "Open in GitHub", linear: "Open in Linear", oncall: "Open the report" };
 
 export class CaseEditor {
-  /** @param {{ saveSkills: (params: { tab: "github" | "linear", skills: Skills }) => void }} host */
+  /** @param {{ saveSkills: (params: { tab: "github" | "linear" | "oncall", skills: Skills }) => void }} host */
   constructor({ saveSkills }) {
     this.saveSkills = saveSkills;
     // "<tab>:<situation>" of the expanded case.
@@ -41,12 +41,12 @@ export class CaseEditor {
   }
 
   // Every case of a tab: its header, and the entry rows of the expanded one.
-  /** @param {{ tab: "github" | "linear", situations: { id: Situation, label: string }[], skills: Skills }} params */
+  /** @param {{ tab: "github" | "linear" | "oncall", situations: { id: Situation, label: string }[], skills: Skills }} params */
   rows({ tab, situations, skills }) {
     return situations.flatMap((situation) => this.caseRows({ tab, situation, skills }));
   }
 
-  /** @param {{ tab: "github" | "linear", situation: { id: Situation, label: string }, skills: Skills }} params */
+  /** @param {{ tab: "github" | "linear" | "oncall", situation: { id: Situation, label: string }, skills: Skills }} params */
   caseRows({ tab, situation, skills }) {
     const t = theme();
     const caseId = `${tab}:${situation.id}`;
@@ -71,7 +71,7 @@ export class CaseEditor {
 
   // ⠿ grip · checkbox · name · "default" on the first checked one. Unchecked: faded.
   /**
-   * @param {{ tab: "github" | "linear", situation: Situation, skills: Skills, caseId: string, entry: string, index: number,
+   * @param {{ tab: "github" | "linear" | "oncall", situation: Situation, skills: Skills, caseId: string, entry: string, index: number,
    *   count: number, isShown: boolean, isDefault: boolean }} params
    */
   entryRow({ tab, situation, skills, caseId, entry, index, count, isShown, isDefault }) {
@@ -108,7 +108,7 @@ export class CaseEditor {
   }
 
   // The checkbox: checked shows the skill in this case's menu.
-  /** @param {{ tab: "github" | "linear", situation: Situation, skills: Skills, caseId: string, entry: string, isShown: boolean }} params */
+  /** @param {{ tab: "github" | "linear" | "oncall", situation: Situation, skills: Skills, caseId: string, entry: string, isShown: boolean }} params */
   shownBox({ tab, situation, skills, caseId, entry, isShown }) {
     const t = theme();
     return div().id(`case-shown-${caseId}-${entry}`).size(20).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
@@ -121,7 +121,7 @@ export class CaseEditor {
   }
 
   // In place of the checkbox for the Open entry: it is not in the menu, only a choice for the button.
-  /** @param {"github" | "linear"} tab */
+  /** @param {"github" | "linear" | "oncall"} tab */
   openMark(tab) {
     const t = theme();
     return div().size(20).flex_none().flex().items_center().justify_center().child(svg(icon(tab)).size(12).text_color(t.muted));
@@ -137,7 +137,7 @@ export class CaseEditor {
     cx.notify();
   }
 
-  /** @param {{ tab: "github" | "linear", situation: Situation, skills: Skills, cx: import("gpui-kit").Context }} params */
+  /** @param {{ tab: "github" | "linear" | "oncall", situation: Situation, skills: Skills, cx: import("gpui-kit").Context }} params */
   handleDrop({ tab, situation, skills, cx }) {
     const drag = this.drag;
     if (!drag) return;
