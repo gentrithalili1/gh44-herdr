@@ -30,21 +30,9 @@ Every issue stays in the list with who decided it and why. Open the report, re-r
 
 On-call ships its own skill, [`oncall-triage`](skills/oncall-triage/SKILL.md), and uses it by default. To use your own, pick any installed skill under ⚙ settings › On-call › Triage skill. Whatever the skill, On-call adds your domain, your rules and the answer format it needs.
 
-## Providers
+## Tracker
 
-A provider connects On-call to one issue tracker. Sentry is the first.
-
-| Provider | Token                                                  |
-| -------- | ------------------------------------------------------ |
-| Sentry   | Personal token with org:read, project:read, event:read |
-
-### Add a provider
-
-1. Add its entry to [`providers/catalog.js`](providers/catalog.js): its name, token help and labels, the pattern that finds its SDK setup files, and its read-only MCP tools for the AI.
-2. Add `providers/<id>.mjs` with the `ProviderApi` of [`providers/contract.js`](providers/contract.js): list orgs, projects and issues, and get one issue and its latest event.
-3. Register it in [`providers/index.mjs`](providers/index.mjs).
-
-The service, the prompts and the settings only use the contract and the catalog, so nothing else changes.
+On-call works with Sentry. It needs a personal token with `org:read`, `project:read` and `event:read`.
 
 ## Files
 
@@ -55,7 +43,17 @@ The service, the prompts and the settings only use the contract and the catalog,
 | `config.js`   | The saved setup, read safely by the panel and the service     |
 | `client.js`   | The panel's I/O: token, service start and stop, its files     |
 | `service/`    | The background service: checks, filters, AI triage, repo scan |
-| `providers/`  | One file per tracker, behind one contract                     |
+| `providers/`  | The Sentry connection, behind a provider contract             |
 | `skills/`     | The default triage skill                                      |
 
 Tests: `node --test tests/oncall.test.js`.
+
+## For contributors
+
+The tracker sits behind a small provider layer in `providers/`, so another one can be added without touching the service, the prompts or the settings:
+
+1. Add its entry to [`providers/catalog.js`](providers/catalog.js): its name, token help and labels, the pattern that finds its SDK setup files, and its read-only MCP tools for the AI.
+2. Add `providers/<id>.mjs` with the `ProviderApi` of [`providers/contract.js`](providers/contract.js): list orgs, projects and issues, and get one issue and its latest event.
+3. Register it in [`providers/index.mjs`](providers/index.mjs).
+
+A second provider also needs a tracker picker in settings, which does not exist yet.

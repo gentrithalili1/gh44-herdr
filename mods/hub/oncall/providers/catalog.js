@@ -1,6 +1,6 @@
 // The issue trackers On-call can watch: what the panel and the prompts call things for each one.
 // Pure, so the panel, the Node service and tests/ all load it. A provider's API calls live in
-// providers/<id>.mjs, which only the service loads. See oncall/README.md, "Add a provider".
+// providers/<id>.mjs, which only the service loads. See oncall/README.md, "For contributors".
 
 /** @typedef {"sentry"} ProviderId */
 /**

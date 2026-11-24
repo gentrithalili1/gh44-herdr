@@ -16,7 +16,7 @@ A repo can bring its own skills. With a terminal in the repo focused, **+ Add sk
 
 The Work panel's **On-call** tab watches your error tracker while you are on call and tells you only about the issues that need you. A background service checks for new issues, an AI triages each one against your domain and rules, and you get a notification with a short report and a suggested fix. It keeps running with Herdr closed.
 
-Set it up in ⚙ settings › On-call: paste a token, pick your projects and repo, and describe your domain. Sentry is supported today; other trackers plug in as providers. See [mods/hub/oncall](mods/hub/oncall/README.md).
+It works with Sentry. Set it up in ⚙ settings › On-call: paste a Sentry token, pick your projects and repo, and describe your domain. See [mods/hub/oncall](mods/hub/oncall/README.md).
 
 <img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="240">
 
