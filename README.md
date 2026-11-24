@@ -1,6 +1,29 @@
+<div align="center">
+
+<img src="docs/logo.png" alt="gh44-herdr logo" width="128">
+
 # gh44-herdr
 
-A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings, gh44 mods.
+**One window for tickets, code and the agents that work on them.**
+
+A setup for the [Herdr app](https://herdr.dev): the `gh44-herdr` layout, keys, settings and gh44 mods.
+
+[![Herdr](https://img.shields.io/badge/Herdr-app-5b5bd6)](https://herdr.dev)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-skills-d97757)](https://claude.com/claude-code)
+[![Tests](https://img.shields.io/badge/tests-node_--test-3c873a)](tests)
+
+[Features](#features) · [Install](#install) · [Screenshots](#screenshots) · [What's here](#whats-here)
+
+<img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="320">
+
+</div>
+
+## Features
+
+- **Work panel:** your Linear tickets and GitHub PRs, each with a skill that runs as an agent in the right worktree.
+- **On-call:** watches Sentry and notifies you only about issues in your domain, with an AI report and a fix.
+- **Repo skills:** a repo's own skills show up while you work in it.
+- **gh44 extras:** the gh44-brain skills and the gh44 themes, one click away.
 
 ## Work panel
 
