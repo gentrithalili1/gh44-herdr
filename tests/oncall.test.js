@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  readOncallConfig, getMissingSetup, setOrg, pickProjects, togglePick, parseEnvironments, addRule, toggleRule, removeRule,
+  readOncallConfig, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
   POLL_MINUTES, NOTIFY_SEVERITY_OPTIONS, BUILT_IN_TRIAGE_SKILL,
 } from "../mods/hub/oncall-config.js";
 import { readFileSync } from "node:fs";
@@ -64,17 +64,22 @@ test("On-call can start once a token, an org and a project are set, in that orde
   assert.equal(getMissingSetup({ config: { ...config, codeFolder: "/code/web", domain: "apps/web" }, hasToken: true }), null);
 });
 
-test("picking another org drops the old org's projects; picked project ids keep the org's order", () => {
+test("picking another org keeps each org's projects; picked project ids keep the org's order", () => {
   assert.equal(setOrg({ config, org }), config);
   assert.deepEqual(setOrg({ config, org: { ...org, slug: "other" } }).projects, []);
+  const picked = { ...config, projects: [{ id: "1", slug: "web" }] };
+  const other = setOrg({ config: picked, org: { ...org, slug: "other" } });
+  assert.deepEqual(other.projectsByOrg[org.slug], [{ id: "1", slug: "web" }]);
+  assert.deepEqual(setOrg({ config: other, org }).projects, [{ id: "1", slug: "web" }]);
   assert.deepEqual(pickProjects({ config, ids: [api.id, web.id], projects: [web, api] }).projects, [web, api]);
   assert.deepEqual(pickProjects({ config, ids: [api.id, "gone"], projects: [web, api] }).projects, [api]);
   assert.deepEqual(pickProjects({ config, ids: [], projects: [web, api] }).projects, []);
 });
 
 test("a multi-choice setting keeps its order and never goes empty", () => {
-  assert.deepEqual(togglePick({ values: ["high"], value: "critical", order: NOTIFY_SEVERITY_OPTIONS }), ["critical", "high"]);
-  assert.deepEqual(togglePick({ values: ["high"], value: "high", order: NOTIFY_SEVERITY_OPTIONS }), ["high"]);
+  assert.deepEqual(pickSome({ picked: ["high", "critical"], order: NOTIFY_SEVERITY_OPTIONS }), ["critical", "high"]);
+  assert.deepEqual(pickSome({ picked: ["high", "nope"], order: NOTIFY_SEVERITY_OPTIONS }), ["high"]);
+  assert.equal(pickSome({ picked: [], order: NOTIFY_SEVERITY_OPTIONS }), null);
   assert.deepEqual(parseEnvironments("production, staging  production"), ["production", "staging"]);
 });
 

@@ -1,13 +1,14 @@
 // The settings' On-call section: the Sentry token, the org and projects to watch, how often,
 // and the on-call switch that starts or stops the background service.
 import { div, svg } from "gpui-kit";
-import { h_flex, v_flex, InputState, Input, TextareaState, Textarea } from "gpui-base";
+import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify, pickFolder, shared, setShared } from "herdr";
 import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./oncall-decisions.js";
+import { openOncallTextDialog, ONCALL_TEXT_SAVED_STORE } from "./oncall-text-dialog.js";
 import { icon, palette, stop, toAnchor, MONO_FONT } from "./ui.js";
 import {
   POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, SENTRY_PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
-  DOMAIN_MODEL, MAX_DOMAIN_LENGTH, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, togglePick, parseEnvironments, addRule, toggleRule, removeRule,
+  DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
 } from "./oncall-config.js";
 import {
   loadOncallConfig, saveOncallConfig, hasSentryToken, saveSentryToken, removeSentryToken, loadSentryAccount,
@@ -16,11 +17,9 @@ import {
 import { loadInstalledSkills, loadRepoSkills } from "./actions.js";
 import { isValidSkillName } from "./settings.js";
 
-/** @typedef {"sentryToken" | "nudgeRules" | "neverRules" | "repoProfile" | "environments" | "domain"} OncallInputId */
-const DOMAIN_PLACEHOLDER = `Describe what you own, or paste your CODEOWNERS lines:
-/apps/shop/ @my-org/my-team
-/packages/payments/ @my-org/my-team
-or: "The shop app: cart, checkout and payments"`;
+/** @typedef {"sentryToken" | "nudgeRules" | "neverRules" | "environments"} OncallInputId */
+// Long texts show this many lines in settings; the rest opens in a dialog.
+const PREVIEW_LINES = 3;
 /** @param {string} text */
 const capitalize = (text) => `${text[0]?.toUpperCase() ?? ""}${text.slice(1)}`;
 
@@ -40,6 +39,15 @@ const SPINNER = "mods/workspace-chrome/spinner.svg";
 // Where the triage skill and project selects put their picks.
 const TRIAGE_SKILL_SELECT = "hub.oncall.triageSkillSelect";
 const PROJECTS_SELECT = "hub.oncall.projectsSelect";
+// The other settings picked from a select: each one's shared store.
+const SETTING_SELECTS = {
+  notify: "hub.oncall.notifySelect",
+  model: "hub.oncall.modelSelect",
+  priorities: "hub.oncall.prioritiesSelect",
+  poll: "hub.oncall.pollSelect",
+  catchUp: "hub.oncall.catchUpSelect",
+};
+/** @typedef {keyof typeof SETTING_SELECTS} SettingSelect */
 // Picked projects named on the closed project select before it says "+N more".
 const PROJECTS_NAMED = 3;
 /** @type {import("./oncall-config.js").SetupStep[]} */
@@ -84,9 +92,12 @@ export class OncallSettings {
     // When the token was last checked, and whether a check runs now.
     this.accountCheckedAt = 0;
     this.isAccountChecking = false;
-    // Which org's projects are loaded, and when.
-    /** @type {{ org: string | null, at: number }} */
-    this.projectsLoaded = { org: null, at: 0 };
+    // Each org's loaded projects and when, so switching orgs back and forth shows them at once.
+    /** @type {Map<string, { items: SentryProject[], at: number }>} */
+    this.projectsByOrg = new Map();
+    // The orgs whose projects are loading now.
+    /** @type {Set<string>} */
+    this.projectsLoading = new Set();
     /** @type {{ status: "idle" | "loading" | "success" | "failed", items: SentryProject[], message?: string }} */
     this.projects = { status: "idle", items: [] };
     /** @type {import("./oncall.js").ServiceStatus | null} */
@@ -112,17 +123,11 @@ export class OncallSettings {
     this.neverInput = InputState.new({ placeholder: "Describe what never deserves a nudge…" });
     this.neverInput.on("submit", (_e, cx) => this.handleAddRule({ cx, list: "neverRules", text: this.neverInput.value() }));
     host.trackFocus({ input: this.neverInput, id: "neverRules" });
-    this.domainInput = TextareaState.new({ placeholder: DOMAIN_PLACEHOLDER });
-    this.domainInput.set_auto_grow(5, 14);
-    this.domainInput.on("change", (_e, cx) => cx.notify());
-    host.trackFocus({ input: this.domainInput, id: "domain" });
     // The repo scan: CODEOWNERS and Sentry noise rules read by code, then a short AI summary.
     /** @type {{ status: "idle" | "scanning" | "failed", message?: string }} */
     this.scan = { status: "idle" };
-    this.profileInput = TextareaState.new({ placeholder: "Scan the repo to fill this in." });
-    this.profileInput.set_auto_grow(6, 20);
-    this.profileInput.on("change", (_e, cx) => cx.notify());
-    host.trackFocus({ input: this.profileInput, id: "repoProfile" });
+    // The last save from the long-text dialog this view has read.
+    this.textSavedAt = shared(ONCALL_TEXT_SAVED_STORE);
     // The skills the triage skill list offers: ~/.claude/skills and the repo's own.
     /** @type {{ installed: string[], repo: string[] }} */
     this.skillChoices = { installed: [], repo: [] };
@@ -130,6 +135,9 @@ export class OncallSettings {
     this.isSkillSelectOpen = false;
     // The project select stays open while you tick projects: every change is read back.
     this.isProjectSelectOpen = false;
+    // The setting selects opened since the section opened: their picks are read back on each tick.
+    /** @type {Set<SettingSelect>} */
+    this.openSettingSelects = new Set();
     // The select field pressed last: its menu opens under it.
     /** @type {import("./ui.js").Anchor | null} */
     this.selectAnchor = null;
@@ -185,6 +193,53 @@ export class OncallSettings {
     this.saveConfig({ cx, next: pickProjects({ config: this.config, ids, projects: this.projects.items }) });
   }
 
+  // The setting selects' picks, saved once they differ from the config.
+  /** @param {import("gpui-kit").Context} cx */
+  applySettingPicks(cx) {
+    const config = this.config;
+    if (!config) return;
+    for (const select of this.openSettingSelects) {
+      const next = this.applySettingPick({ config, select, picked: this.readSelect(SETTING_SELECTS[select]) });
+      if (next !== config && JSON.stringify(next) !== JSON.stringify(config)) {
+        this.saveConfig({ cx, next });
+        return;
+      }
+    }
+  }
+
+  // The config with one select's pick in it; the same config for a pick it does not know.
+  /** @param {{ config: OncallConfig, select: SettingSelect, picked: unknown }} params @returns {OncallConfig} */
+  applySettingPick({ config, select, picked }) {
+    const list = Array.isArray(picked) ? picked : [];
+    switch (select) {
+      case "notify": {
+        const severities = pickSome({ picked: list, order: NOTIFY_SEVERITY_OPTIONS });
+        return severities ? { ...config, notifySeverities: severities } : config;
+      }
+      case "priorities": {
+        const priorities = pickSome({ picked: list, order: SENTRY_PRIORITIES });
+        return priorities ? { ...config, aiPriorities: priorities } : config;
+      }
+      case "model": {
+        const model = MODELS.find((m) => m.id === picked)?.id;
+        return model ? { ...config, model } : config;
+      }
+      case "poll": {
+        const minutes = POLL_MINUTES.find((m) => String(m) === picked);
+        return minutes ? { ...config, pollMinutes: minutes } : config;
+      }
+      case "catchUp": {
+        const hours = CATCH_UP_HOURS.find((h) => String(h) === picked);
+        return hours ? { ...config, catchUpHours: hours } : config;
+      }
+      default: {
+        /** @type {never} */
+        const unknownSelect = select;
+        return unknownSelect;
+      }
+    }
+  }
+
   // The triage skill select's pick, once it differs from the saved skill.
   /** @param {import("gpui-kit").Context} cx */
   applySkillPick(cx) {
@@ -227,20 +282,22 @@ export class OncallSettings {
     const org = this.config?.org?.slug ?? null;
     if (!org || !(await hasSentryToken())) {
       this.projects = { status: "idle", items: [] };
-      this.projectsLoaded = { org: null, at: 0 };
+      this.projectsByOrg.clear();
       cx.notify();
       return;
     }
-    const isFresh = this.projectsLoaded.org === org && Date.now() - this.projectsLoaded.at < ACCOUNT_REFRESH_MS;
-    if (isFresh || this.projects.status === "loading") return;
-    // Another org's list goes; the same org's list stays on screen while it reloads.
-    const items = this.projectsLoaded.org === org ? this.projects.items : [];
-    this.projects = { status: "loading", items };
+    // Whatever is known for this org shows right away; a fresh list needs no reload.
+    const cached = this.projectsByOrg.get(org);
+    this.projects = cached ? { status: "success", items: cached.items } : { status: "loading", items: [] };
     cx.notify();
+    if ((cached && Date.now() - cached.at < ACCOUNT_REFRESH_MS) || this.projectsLoading.has(org)) return;
+    this.projectsLoading.add(org);
     const r = await loadSentryProjects();
+    this.projectsLoading.delete(org);
+    if (r.status === "success") this.projectsByOrg.set(org, { items: r.projects, at: Date.now() });
+    // Another org picked meanwhile: its own load fills the screen.
     if (this.config?.org?.slug !== org) return;
-    this.projects = r.status === "success" ? { status: "success", items: r.projects } : { status: "failed", items, message: r.message };
-    if (r.status === "success") this.projectsLoaded = { org, at: Date.now() };
+    this.projects = r.status === "success" ? { status: "success", items: r.projects } : { status: "failed", items: cached?.items ?? [], message: r.message };
     cx.notify();
   }
 
@@ -256,9 +313,23 @@ export class OncallSettings {
   tick(cx) {
     this.applySkillPick(cx);
     this.applyProjectPick(cx);
+    this.applySettingPicks(cx);
+    this.applyTextSave(cx);
     if (Date.now() - this.statusReadAt < STATUS_REFRESH_MS) return;
     this.statusReadAt = Date.now();
     cx.spawn(async (cx) => this.refreshStatus(cx));
+  }
+
+  // A save in the long-text dialog: read the config again.
+  /** @param {import("gpui-kit").Context} cx */
+  applyTextSave(cx) {
+    const savedAt = shared(ONCALL_TEXT_SAVED_STORE);
+    if (savedAt === this.textSavedAt) return;
+    this.textSavedAt = savedAt;
+    cx.spawn(async (cx) => {
+      this.config = await loadOncallConfig();
+      cx.notify();
+    });
   }
 
   /** @param {{ cx: import("gpui-kit").Context, next: OncallConfig }} params */
@@ -302,7 +373,7 @@ export class OncallSettings {
         this.account = { status: "missing" };
         this.accountCheckedAt = Date.now();
         this.projects = { status: "idle", items: [] };
-        this.projectsLoaded = { org: null, at: 0 };
+        this.projectsByOrg.clear();
       } else {
         notify({ title: "Could not remove the Sentry token", body: r.message, level: "warning" });
       }
@@ -348,39 +419,30 @@ export class OncallSettings {
     const group = this.host.settingsGroup;
     const advanced = [
       this.sectionTitle("Rules"),
-      group({ title: "Nudge me when…", description: "Plain language. The AI checks every issue against these. With none on, any real defect counts.", children: this.ruleRows({ config, list: "nudgeRules" }) }),
-      group({ title: "Never nudge me for…", description: "Checked before the rules above. A match is never a nudge.", children: this.ruleRows({ config, list: "neverRules" }) }),
-      this.sectionTitle("AI"),
-      group({
-        title: "AI model", description: "The Claude model that triages. Bigger looks deeper and costs more.",
-        children: MODELS.map((m) => this.host.settingsChoice({
-          id: `oncall-model-${m.id}`, label: `${m.label} (${m.description})`, isOn: config.model === m.id,
-          onPick: (cx) => this.saveConfig({ cx, next: { ...config, model: m.id } }),
-        })),
-      }),
-      group({ title: "Triage skill", description: "The skill that guides the AI's investigation. The default, oncall-triage, ships with gh44-herdr; pick any of your own instead.", children: [this.triageSkillSelect(config)] }),
-      group({
-        title: "Sentry priority for AI", description: "Issues with another Sentry priority skip the AI and never nudge.",
-        children: SENTRY_PRIORITIES.map((priority) => this.host.settingsToggle({
-          id: `oncall-priority-${priority}`, label: capitalize(priority), isOn: config.aiPriorities.includes(priority),
-          onToggle: (cx) => this.saveConfig({ cx, next: { ...config, aiPriorities: togglePick({ values: config.aiPriorities, value: priority, order: SENTRY_PRIORITIES }) } }),
-        })),
-      }),
+      group({ title: "Notify me when…", description: "Plain language. The AI checks every issue against these. With none on, any real defect counts.", children: this.ruleRows({ config, list: "nudgeRules" }) }),
+      group({ title: "Never notify me for…", description: "Checked before the rules above. A match never notifies you.", children: this.ruleRows({ config, list: "neverRules" }) }),
       this.sectionTitle("Checks"),
+      group({
+        title: "Sentry priority for AI", description: "Issues with another Sentry priority skip the AI and never notify you.",
+        children: [this.settingSelect({
+          select: "priorities", title: "Sentry priority for AI", isMulti: true, value: config.aiPriorities,
+          options: SENTRY_PRIORITIES.map((p) => ({ value: p, label: capitalize(p) }))
+        })],
+      }),
       group({ title: "Environments", description: "Only events from these environments, comma separated. Empty: all of them.", children: [this.textField({ id: "environments", input: this.envInput })] }),
       group({
         title: "Check every", description: "How often the service asks Sentry. A change applies after the next check.",
-        children: POLL_MINUTES.map((minutes) => this.host.settingsChoice({
-          id: `oncall-poll-${minutes}`, label: minutes === 1 ? "1 minute" : `${minutes} minutes`, isOn: config.pollMinutes === minutes,
-          onPick: (cx) => this.saveConfig({ cx, next: { ...config, pollMinutes: minutes } }),
-        })),
+        children: [this.settingSelect({
+          select: "poll", title: "Check every", isMulti: false, value: [String(config.pollMinutes)],
+          options: POLL_MINUTES.map((m) => ({ value: String(m), label: m === 1 ? "1 minute" : `${m} minutes` }))
+        })],
       }),
       group({
         title: "Look back", description: "Issues seen in this window are checked, also what changed while you were off call.",
-        children: CATCH_UP_HOURS.map((hours) => this.host.settingsChoice({
-          id: `oncall-catchup-${hours}`, label: hours === 1 ? "Last hour" : `Last ${hours} hours`, isOn: config.catchUpHours === hours,
-          onPick: (cx) => this.saveConfig({ cx, next: { ...config, catchUpHours: hours } }),
-        })),
+        children: [this.settingSelect({
+          select: "catchUp", title: "Look back", isMulti: false, value: [String(config.catchUpHours)],
+          options: CATCH_UP_HOURS.map((h) => ({ value: String(h), label: h === 1 ? "Last hour" : `Last ${h} hours` }))
+        })],
       }),
     ];
     // Setup shows one step at a time: a step appears once the one before it is done, and the
@@ -393,7 +455,7 @@ export class OncallSettings {
       ...(isReached("org") ? [group({ title: "Organization", description: "The Sentry organization to watch.", children: this.orgRows(config) })] : []),
       ...(isReached("projects") ? [group({ title: "Projects", description: "Only these projects' issues reach you.", children: this.projectRows(config) })] : []),
       ...(isReached("repo") ? [group({ title: "Repo", description: "The checkout you are on call for: the AI reads it to find the cause and owner, and Continue in Claude opens there.", children: this.repoRows(config) })] : []),
-      ...(isReached("domain") && config.codeFolder ? [group({ title: "Repo profile", description: "What the scan learned: CODEOWNERS and Sentry noise rules read exactly, and a short AI summary. Every triage reads it. Edit the summary freely.", children: this.profileRows(config) })] : []),
+      ...(isReached("domain") && config.codeFolder ? [group({ title: "Repo profile", description: "What the scan learned: CODEOWNERS and Sentry noise rules read exactly, and a short AI summary. Every triage reads it.", children: this.profileRows(config) })] : []),
       ...(isReached("domain") ? [group({
         title: "My domain",
         description: `What you are on call for. Before the full triage, a quick ${capitalize(DOMAIN_MODEL)} check (about a cent) drops issues outside it, so other teams' errors never nudge you.`,
@@ -410,22 +472,33 @@ export class OncallSettings {
     return [
       group({ title: "On call", description: "While on, Sentry is checked in the background, even with Herdr closed.", children: this.switchRows(config) }),
       ...setup,
+      this.sectionTitle("AI"),
+      group({ title: "Triage skill", description: "The skill that guides the AI's investigation. The default, oncall-triage, ships with gh44-herdr; pick any of your own instead.", children: [this.triageSkillSelect(config)] }),
       group({
-        title: "Notify me for", description: "Severities the AI gives that send a nudge.",
-        children: NOTIFY_SEVERITY_OPTIONS.map((severity) => this.host.settingsToggle({
-          id: `oncall-notify-${severity}`, label: capitalize(severity), isOn: config.notifySeverities.includes(severity),
-          onToggle: (cx) => this.saveConfig({ cx, next: { ...config, notifySeverities: togglePick({ values: config.notifySeverities, value: severity, order: NOTIFY_SEVERITY_OPTIONS }) } }),
-        })),
+        title: "AI model", description: "The Claude model that triages. Bigger looks deeper and costs more.",
+        children: [this.settingSelect({
+          select: "model", title: "AI model", isMulti: false, value: [config.model],
+          options: MODELS.map((m) => ({ value: m.id, label: `${m.label} · ${m.description}` }))
+        })],
+      }),
+      this.sectionTitle("Notifications"),
+      group({
+        title: "Notify me for", description: "The severities the AI gives that notify you.",
+        children: [this.settingSelect({
+          select: "notify", title: "Notify me for", isMulti: true, value: config.notifySeverities,
+          options: NOTIFY_SEVERITY_OPTIONS.map((v) => ({ value: v, label: capitalize(v) }))
+        })],
       }),
       group({
-        title: "Alert sound", description: "A soft chime with each nudge.",
+        title: "Alert sound", description: "A soft chime with each notification.",
         children: [h_flex().gap(8).items_center()
           .child(div().flex_1().child(this.host.settingsToggle({ id: "oncall-sound", label: "Play a sound", isOn: config.isSoundOn, onToggle: (cx) => this.saveConfig({ cx, next: { ...config, isSoundOn: !config.isSoundOn } }) })))
           .child(this.button({ id: "oncall-sound-test", label: "Test", onClick: () => { void playAlertSound(); } }))
-          .child(this.button({ id: "oncall-toast-test", label: "Send a test nudge", onClick: () => this.handleTestNudge(config) }))],
+          .child(this.button({ id: "oncall-toast-test", label: "Send a test notification", onClick: () => this.handleTestNudge(config) }))],
       }),
+      this.sectionTitle("On-call tab"),
       group({
-        title: "On-call tab", description: "What the tab shows above the list.",
+        title: "Today", description: "What the tab shows above the list.",
         children: [this.host.settingsToggle({
           id: "oncall-show-today", label: "Show today's numbers", isOn: isTodayShown(shared(ONCALL_SHOW_TODAY_STORE)),
           onToggle: () => setShared(ONCALL_SHOW_TODAY_STORE, !isTodayShown(shared(ONCALL_SHOW_TODAY_STORE))),
@@ -438,7 +511,7 @@ export class OncallSettings {
     ];
   }
 
-  // "Advanced ▸": rules, the AI and the checks, folded away until asked for.
+  // "Advanced ▸": the rules and the checks, folded away until asked for.
   advancedToggle() {
     const t = theme();
     return h_flex().id("oncall-advanced").flex_none().h(32).px(6).gap(6).items_center().rounded(6).cursor_pointer()
@@ -446,7 +519,7 @@ export class OncallSettings {
       .on_click((_e, cx) => { this.isAdvancedOpen = !this.isAdvancedOpen; cx.notify(); })
       .child(svg(icon(this.isAdvancedOpen ? "chevron" : "chevron-right")).size(12).text_color(t.muted))
       .child(div().flex_1().child("Advanced"))
-      .child(div().text_size(11.5).text_color(t.dim).child("rules, AI model, environments, timing"));
+      .child(div().text_size(11.5).text_color(t.dim).child("rules, Sentry priority, environments, timing"));
   }
 
   // [Preview next check] and its answer: how many issues, what the AI would look at, what is filtered.
@@ -454,9 +527,10 @@ export class OncallSettings {
     const t = theme();
     const preview = this.preview;
     const button = this.button({ id: "oncall-preview", label: preview.status === "loading" ? "Checking Sentry…" : "Preview next check", onClick: (cx) => this.handlePreview(cx) });
-    const head = h_flex().gap(8).items_center().child(button)
+    const head = h_flex().gap(8).items_center()
       .child(div().flex_1().min_w(0).text_size(11.5).text_color(preview.status === "failed" ? palette(t).warning : t.dim)
-        .child(preview.text ?? "See what a check would do, without running the AI."));
+        .child(preview.text ?? "See what a check would do, without running the AI."))
+      .child(button);
     const lines = (preview.lines ?? []).map((line, i) => div().id(`oncall-preview-${i}`).px(6).text_size(11.5).text_color(t.muted).truncate().child(line));
     return [head, ...lines];
   }
@@ -490,7 +564,6 @@ export class OncallSettings {
       /** @type {OncallConfig} */
       const next = { ...this.config, codeFolder: folder, repoProfile: null };
       this.config = next;
-      this.profileInput.set_value("");
       cx.notify();
       const saved = await saveOncallConfig(next);
       if (saved.status !== "success") {
@@ -517,7 +590,6 @@ export class OncallSettings {
     this.scan = { status: "idle" };
     if (this.config && this.config.codeFolder === r.profile.folder) {
       this.saveConfig({ cx, next: { ...this.config, repoProfile: r.profile } });
-      this.profileInput.set_value(r.profile.summary);
     }
     cx.notify();
   }
@@ -539,8 +611,6 @@ export class OncallSettings {
     const colors = palette(t);
     const profile = config.repoProfile;
     const isScanning = this.scan.status === "scanning";
-    const typed = this.profileInput.value().trim();
-    const isUnsaved = Boolean(profile) && typed !== profile?.summary.trim();
     /** @param {number} n @param {string} word */
     const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
     const status = (() => {
@@ -556,40 +626,37 @@ export class OncallSettings {
       .child(div().flex_1().min_w(0).text_size(11.5).text_color(this.scan.status === "failed" ? colors.warning : t.dim).child(status))
       .when(!isScanning, (el) => el.child(this.button({ id: "oncall-repo-scan", label: profile ? "Rescan" : "Scan", onClick: (cx) => { void this.runScan(cx); } })));
     if (!profile) return [statusRow];
-    const editor = div().rounded(6).border(1).px(8).py(6).bg(t.background).on_mouse_down("left", stop)
-      .border_color(this.host.isFocused("repoProfile") ? t.accent : t.input)
-      .child(Textarea.new(this.profileInput).w_full().text_size(12).text_color(t.foreground));
-    const saveRow = h_flex().gap(8).items_center()
-      .child(div().flex_1().text_size(11.5).text_color(colors.warning).child("Not saved yet"))
-      .child(this.button({ id: "oncall-profile-save", label: "Save summary", onClick: (cx) => {
-        if (!this.config?.repoProfile) return;
-        this.saveConfig({ cx, next: { ...this.config, repoProfile: { ...this.config.repoProfile, summary: typed } } });
-      } }));
-    return [statusRow, editor, ...(isUnsaved ? [saveRow] : [])];
+    return [statusRow, this.textPreview({ id: "oncall-profile", text: profile.summary, isMono: false, field: "summary" })];
   }
 
   /** @param {OncallConfig} config */
   domainRows(config) {
     const t = theme();
-    const typed = this.domainInput.value().trim();
-    const isUnsaved = typed !== config.domain;
     const lines = config.domain ? config.domain.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#")).length : 0;
     return [
-      div().rounded(6).border(1).px(8).py(6).bg(t.background).on_mouse_down("left", stop)
-        .border_color(this.host.isFocused("domain") ? t.accent : t.input)
-        .child(Textarea.new(this.domainInput).w_full().text_size(12).font_family(MONO_FONT).text_color(t.foreground)),
+      ...(config.domain ? [this.textPreview({ id: "oncall-domain", text: config.domain, isMono: true, field: "domain" })] : []),
       h_flex().gap(8).items_center()
-        .child(div().flex_1().min_w(0).text_size(11.5).text_color(isUnsaved ? palette(t).warning : t.dim)
-          .child(isUnsaved ? "Not saved yet" : config.domain ? `Saved · ${lines} line${lines === 1 ? "" : "s"} · the check runs on every new issue` : "Not set yet: On-call starts once it is"))
-        .when(isUnsaved, (el) => el.child(this.button({ id: "oncall-domain-save", label: "Save domain", onClick: (cx) => {
-          if (!this.config) return;
-          this.saveConfig({ cx, next: { ...this.config, domain: typed.slice(0, MAX_DOMAIN_LENGTH) } });
-        } })))
-        .when(!isUnsaved && Boolean(config.domain), (el) => el.child(this.button({
+        .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim)
+          .child(config.domain ? `${lines} line${lines === 1 ? "" : "s"} · the check runs on every new issue` : "Not set yet: On-call starts once it is"))
+        .when(!config.domain, (el) => el.child(this.button({ id: "oncall-domain-write", label: "Write domain…", onClick: () => openOncallTextDialog("domain") })))
+        .when(Boolean(config.domain), (el) => el.child(this.button({
           id: "oncall-domain-test", label: this.domainTest.status === "loading" ? "Testing…" : "Test on recent issues", onClick: (cx) => this.handleTestDomain(cx),
         }))),
       ...this.domainTestRows(),
     ];
+  }
+
+  // The first lines of a long text, with "+N more lines" and an Edit button that opens it in a dialog.
+  /** @param {{ id: string, text: string, isMono: boolean, field: import("./oncall-text-dialog.js").OncallTextField }} params */
+  textPreview({ id, text, isMono, field }) {
+    const t = theme();
+    const lines = text.split("\n").filter((l) => l.trim());
+    const hidden = lines.length - PREVIEW_LINES;
+    return h_flex().id(id).gap(10).items_start().rounded(6).border(1).border_color(t.border).px(8).py(6).bg(t.background)
+      .child(v_flex().flex_1().min_w(0).gap(1).text_size(12).text_color(t.muted).when(isMono, (el) => el.font_family(MONO_FONT))
+        .children(lines.slice(0, PREVIEW_LINES).map((line) => div().truncate().child(line)))
+        .when(hidden > 0, (el) => el.child(div().text_size(11.5).text_color(t.dim).child(`+${hidden} more line${hidden === 1 ? "" : "s"}`))))
+      .child(this.button({ id: `${id}-edit`, label: "Edit…", onClick: () => openOncallTextDialog(field) }));
   }
 
   domainTestRows() {
@@ -674,6 +741,22 @@ export class OncallSettings {
       .child(svg(icon("chevron")).size(12).flex_none().text_color(t.muted));
   }
 
+  // A select field: its picks and a chevron. The menu opens under it.
+  /** @param {{ select: SettingSelect, title: string, isMulti: boolean, value: string[], options: { value: string, label: string }[] }} params */
+  settingSelect({ select, title, isMulti, value, options }) {
+    const t = theme();
+    const labels = options.filter((o) => value.includes(o.value)).map((o) => o.label);
+    return h_flex().id(`oncall-select-${select}`).h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.input).bg(t.background)
+      .cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_mouse_down("left", (e) => { this.selectAnchor = toAnchor(e); })
+      .on_click(() => {
+        this.openSettingSelects.add(select);
+        this.host.openSelect({ store: SETTING_SELECTS[select], title, value: isMulti ? value : value[0] ?? "", options, isMulti, anchor: this.selectAnchor });
+      })
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(labels.join(", ")))
+      .child(svg(icon("chevron")).size(12).flex_none().text_color(t.muted));
+  }
+
   // A text setting, saved on Enter; "unsaved" shows while it differs from the saved value.
   /** @param {{ id: "environments", input: import("gpui-base").InputState }} params */
   textField({ id, input }) {
@@ -695,9 +778,7 @@ export class OncallSettings {
   fillTextFields() {
     const config = this.config;
     if (!config) return;
-    this.profileInput.set_value(config.repoProfile?.summary ?? "");
     this.envInput.set_value(config.environments.join(", "));
-    this.domainInput.set_value(config.domain);
   }
 
   /** @param {{ cx: import("gpui-kit").Context, id: "environments" }} params */

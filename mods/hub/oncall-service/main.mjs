@@ -79,6 +79,20 @@ const log = (line) => process.stdout.write(`${new Date().toISOString()} ${line}\
 /** @param {unknown} error */
 const toMessage = (error) => (error instanceof Error ? error.message : String(error));
 
+// Sentry's error detail as text: a string, or an object with a message (403s answer that way).
+/** @param {string} text @returns {string | null} */
+function readErrorDetail(text) {
+  let detail = null;
+  try {
+    detail = JSON.parse(text).detail;
+  } catch {
+    return null;
+  }
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && typeof detail.message === "string") return detail.message;
+  return detail ? JSON.stringify(detail) : null;
+}
+
 /** @param {string} path */
 async function readJson(path) {
   try {
@@ -119,13 +133,7 @@ async function sentryGet({ baseUrl, path, token }) {
   });
   const text = await response.text();
   if (!response.ok) {
-    let detail = null;
-    try {
-      detail = JSON.parse(text).detail;
-    } catch {
-      detail = null;
-    }
-    throw new SentryError({ status: response.status, message: detail ?? `Sentry answered ${response.status}` });
+    throw new SentryError({ status: response.status, message: readErrorDetail(text) ?? `Sentry answered ${response.status}` });
   }
   return JSON.parse(text);
 }

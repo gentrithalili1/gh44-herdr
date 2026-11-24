@@ -23,6 +23,7 @@
  *   isOn: boolean,
  *   org: SentryOrg | null,
  *   projects: SentryProject[],
+ *   projectsByOrg: Record<string, SentryProject[]>,
  *   environments: string[],
  *   pollMinutes: number,
  *   catchUpHours: number,
@@ -112,6 +113,12 @@ function readProjects(value) {
   return value.map(toRecord).filter((p) => isText(p.id) && isText(p.slug)).map((p) => ({ id: p.id, slug: p.slug }));
 }
 
+// Each org's picked projects, kept for switching back to it.
+/** @param {unknown} value @returns {Record<string, SentryProject[]>} */
+function readProjectsByOrg(value) {
+  return Object.fromEntries(Object.entries(toRecord(value)).filter(([slug]) => isText(slug)).map(([slug, list]) => [slug, readProjects(list)]));
+}
+
 // The values of a saved list that are among the options; the fallback when none are.
 /** @template T @param {{ value: unknown, options: readonly T[], fallback: T[] }} params @returns {T[]} */
 function readPicks({ value, options, fallback }) {
@@ -163,6 +170,7 @@ export function readOncallConfig(saved) {
     isOn: s.isOn === true,
     org: readOrg(s.org),
     projects: readProjects(s.projects),
+    projectsByOrg: readProjectsByOrg(s.projectsByOrg),
     environments: readEnvironments(s.environments),
     pollMinutes: POLL_MINUTES.includes(s.pollMinutes) ? s.pollMinutes : DEFAULT_POLL_MINUTES,
     catchUpHours: CATCH_UP_HOURS.includes(s.catchUpHours) ? s.catchUpHours : DEFAULT_CATCH_UP_HOURS,
@@ -192,19 +200,26 @@ export function getMissingSetup({ config, hasToken }) {
   return null;
 }
 
-// Picking another org drops the projects picked in the old one.
+// Picking another org keeps the old org's projects aside and brings back the ones picked in the
+// new org before, if any.
 /** @param {{ config: OncallConfig, org: SentryOrg }} params @returns {OncallConfig} */
-export const setOrg = ({ config, org }) => (config.org?.slug === org.slug ? config : { ...config, org, projects: [] });
+export function setOrg({ config, org }) {
+  if (config.org?.slug === org.slug) return config;
+  const projectsByOrg = config.org ? { ...config.projectsByOrg, [config.org.slug]: config.projects } : config.projectsByOrg;
+  return { ...config, org, projects: projectsByOrg[org.slug] ?? [], projectsByOrg };
+}
 
 // The projects whose ids were picked, in the org's order.
 /** @param {{ config: OncallConfig, ids: string[], projects: SentryProject[] }} params @returns {OncallConfig} */
 export const pickProjects = ({ config, ids, projects }) => ({ ...config, projects: projects.filter((p) => ids.includes(p.id)) });
 
-// A multi-choice setting: toggles one value, but never leaves the list empty.
-/** @template T @param {{ values: T[], value: T, order: readonly T[] }} params @returns {T[]} */
-export function togglePick({ values, value, order }) {
-  const next = values.includes(value) ? values.filter((v) => v !== value) : [...values, value];
-  return next.length === 0 ? values : order.filter((o) => next.includes(o));
+// A multi-choice setting's picks in the options' order; null when none of them is an option,
+// since the setting never goes empty.
+/** @template T @param {{ picked: unknown[], order: readonly T[] }} params @returns {T[] | null} */
+export function pickSome({ picked, order }) {
+  const values = picked.map(String);
+  const next = order.filter((o) => values.includes(String(o)));
+  return next.length ? next : null;
 }
 
 // "production, staging" -> ["production", "staging"]; empty means every environment.

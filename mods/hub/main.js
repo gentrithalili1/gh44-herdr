@@ -19,6 +19,7 @@ import { icon, palette, stop, toAnchor, MONO_FONT, GUTTER } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
+import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall-text-dialog.js";
 import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall.js";
 import { OncallView, ReportView, oncallMenuRows } from "./oncall-view.js";
 import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall-decisions.js";
@@ -376,6 +377,10 @@ export default class Hub extends View {
   init(_props, cx) {
     if (props()?.dialog === GH44_DIALOG) {
       this.gh44Dialog = new Gh44Dialog({ cx, getSettings: readPanelSettings, patchSettings });
+      return;
+    }
+    if (props()?.dialog === ONCALL_TEXT_DIALOG) {
+      this.oncallTextDialog = new OncallTextDialog({ cx, field: props().field });
       return;
     }
     if (props()?.report) {
@@ -1766,6 +1771,7 @@ export default class Hub extends View {
 
   render(cx) {
     if (this.gh44Dialog) return this.gh44Dialog.render();
+    if (this.oncallTextDialog) return this.oncallTextDialog.render();
     if (this.reportView) return this.reportView.render();
     if (this.isMenu) return this.menuView();
     const settings = readPanelSettings();
