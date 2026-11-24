@@ -479,7 +479,7 @@ export class OncallSettings {
       group({ title: "On call", description: `While on, ${tracker.name} is checked in the background, even with Herdr closed.`, children: this.switchRows(config) }),
       ...setup,
       this.sectionTitle("AI"),
-      group({ title: "Triage skill", description: "The skill that guides the AI's investigation. The default, oncall-triage, ships with gh44-herdr; pick any of your own instead.", children: [this.triageSkillSelect(config)] }),
+      group({ title: "Triage skill", description: "The skill that guides the AI's investigation. The default, oncall-triage, ships with gh44-omnia; pick any of your own instead.", children: [this.triageSkillSelect(config)] }),
       group({
         title: "AI model", description: "The Claude model that triages. Bigger looks deeper and costs more.",
         children: [this.settingSelect({

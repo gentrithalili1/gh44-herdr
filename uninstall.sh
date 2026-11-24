@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Undoes install.sh: switches to Herdr's main layout and removes the gh44-herdr layout, the mods,
+# Undoes install.sh: switches to Herdr's main layout and removes the gh44-omnia layout, the mods,
 # Revive's hooks, the plugins in plugins.txt and the gh44 themes. Keys and settings go back to the
 # newest .bak file install.sh kept, or to Herdr's defaults. The Herdr app must be open.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_HOME="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-LAYOUT=gh44-herdr
+LAYOUT=gh44-omnia
+FORMER_LAYOUTS="gh44-herdr"
 FALLBACK_LAYOUT=main
 
 die() { echo "herdr: $*" >&2; exit 1; }
@@ -17,6 +18,7 @@ herdr-app status > /dev/null 2>&1 || die "open the Herdr app first"
 # 1. Show Herdr's own layout, then remove ours.
 herdr-app do layout.switch "{\"name\":\"$FALLBACK_LAYOUT\"}" > /dev/null
 rm -f "$APP_HOME/layouts/$LAYOUT.json"
+for former in $FORMER_LAYOUTS; do rm -f "$APP_HOME/layouts/$former.json"; done
 echo "layout: $FALLBACK_LAYOUT"
 
 # 2. Plugins with their own installer.

@@ -1,6 +1,6 @@
 ---
 name: oncall-triage
-description: Triage one issue from an error tracker (Sentry or similar) for an on-call engineer. Finds the real code path, the owner and the severity, and writes a short report with the fix. The On-call service of gh44-herdr runs it by default; anyone can use it for the same triage by hand.
+description: Triage one issue from an error tracker (Sentry or similar) for an on-call engineer. Finds the real code path, the owner and the severity, and writes a short report with the fix. The On-call service of gh44-omnia runs it by default; anyone can use it for the same triage by hand.
 ---
 
 # On-call triage

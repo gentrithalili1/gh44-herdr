@@ -35,29 +35,29 @@ const ERROR_TAIL_LINES = 3;
 /** @typedef {{ status: "success" } | { status: "failed", reason: "notLinked" | "clone" | "install", message?: string }} InstallOutcome */
 /** @type {Record<"notLinked" | "clone" | "install", string>} */
 export const INSTALL_ERRORS = {
-  notLinked: "The hub mod is not linked from gh44-herdr. Run gh44-herdr/install.sh.",
+  notLinked: "The hub mod is not linked from gh44-omnia. Run gh44-omnia/install.sh.",
   clone: "git clone failed. Check your network and GitHub access.",
   install: "The install failed.",
 };
 
-// The gh44-herdr checkout, from the hub mod's link. null: the mod is not linked.
-async function getGh44HerdrFolder() {
+// The gh44-omnia checkout, from the hub mod's link. null: the mod is not linked.
+async function getGh44OmniaFolder() {
   const link = await exec("readlink", [`${appHome()}/mods/hub`]);
   const target = link.stdout.trim();
   if (link.code !== 0 || !target) return null;
   return target.replace(/\/mods\/hub\/?$/, "");
 }
 
-// The gh44 folder that holds gh44-herdr. null: the mod is not linked.
+// The gh44 folder that holds gh44-omnia. null: the mod is not linked.
 async function getGh44Folder() {
-  const folder = await getGh44HerdrFolder();
+  const folder = await getGh44OmniaFolder();
   return folder ? folder.replace(/\/[^/]+$/, "") : null;
 }
 
 /** @param {string} output */
 const lastLines = (output) => output.trim().split("\n").slice(-ERROR_TAIL_LINES).join("\n");
 
-// Clones a gh44 repo next to gh44-herdr, where install.sh looks for it. A clone already there is reused.
+// Clones a gh44 repo next to gh44-omnia, where install.sh looks for it. A clone already there is reused.
 /** @param {{ name: "gh44-theme" | "gh44-brain" }} params @returns {Promise<{ status: "success", folder: string } | InstallOutcome>} */
 async function cloneGh44Repo({ name }) {
   const parent = await getGh44Folder();
@@ -98,11 +98,11 @@ export async function installGh44Brain() {
 
 /** @typedef {{ status: "started" } | { status: "failed", reason: "notLinked" | "start", message?: string }} UninstallOutcome */
 
-// gh44-herdr's uninstall.sh, detached: it removes this panel's mod, so it must outlive it.
+// gh44-omnia's uninstall.sh, detached: it removes this panel's mod, so it must outlive it.
 /** @returns {Promise<UninstallOutcome>} */
-export async function uninstallGh44Herdr() {
+export async function uninstallGh44Omnia() {
   try {
-    const folder = await getGh44HerdrFolder();
+    const folder = await getGh44OmniaFolder();
     if (!folder) return { status: "failed", reason: "notLinked" };
     const start = await exec("sh", ["-c", 'nohup bash "$0" >/dev/null 2>&1 &', `${folder}/uninstall.sh`]);
     return start.code === 0 ? { status: "started" } : { status: "failed", reason: "start", message: lastLines(start.stderr) };

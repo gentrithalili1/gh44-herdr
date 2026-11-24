@@ -79,7 +79,7 @@
           "id": "tabs",
           "type": "block",
           "content": {
-            "mod": "gh44-herdr-tabs"
+            "mod": "gh44-omnia-tabs"
           },
           "size": {
             "px": 42
