@@ -1,30 +1,23 @@
 <p align="center"><img src="docs/gh44-omnia.png" alt="gh44-omnia" width="200"></p>
 <h1 align="center">gh44-omnia</h1>
-<p align="center"><strong>Your tickets, your code and the agents that work on them, in one Herdr window.<br>Pick a ticket, start a skill, and watch the agent do it in the right worktree.</strong></p>
+<p align="center"><strong>Tickets, code and the agents that work on them, in one Herdr window.</strong></p>
+<p align="center">
+<a href="https://herdr.dev"><img src="https://img.shields.io/badge/Herdr-layout-5b5bd6" alt="Herdr layout"></a>
+<a href="https://claude.com/claude-code"><img src="https://img.shields.io/badge/Claude_Code-agents-d97757" alt="Claude Code"></a>
+<img src="https://img.shields.io/badge/platform-macOS-000000?logo=apple" alt="macOS">
+<img src="https://img.shields.io/badge/node-22%2B-3c873a?logo=node.js&logoColor=white" alt="Node 22+">
+<a href="https://github.com/gentrithalili1/gh44-omnia/commits/main"><img src="https://img.shields.io/github/last-commit/gentrithalili1/gh44-omnia" alt="Last commit"></a>
+<a href="https://github.com/gentrithalili1/gh44-omnia/stargazers"><img src="https://img.shields.io/github/stars/gentrithalili1/gh44-omnia?style=flat" alt="Stars"></a>
+</p>
 
-You jump between Linear, GitHub, a terminal per repo and a Claude tab per task, and you lose track of what runs where. gh44-omnia is a setup for the [Herdr app](https://herdr.dev) that puts it all in one layout. The **Work panel** lists your Linear tickets and GitHub PRs; each row starts its skill as a Claude agent in the ticket's worktree and shows how it goes. The **On-call** tab watches Sentry while you are on call and only tells you about the issues in your domain, with an AI report and a suggested fix. Repo skills, the gh44 themes and the gh44-brain skills are one click away.
+A [Herdr](https://herdr.dev) setup where each Linear ticket and GitHub PR gets a button that runs its skill as a Claude agent, in the right worktree.
 
-## Work panel
+## Features
 
-One window for the whole loop: the work to do (Linear tickets, GitHub PRs), the code (spaces and worktrees), and the agents that work on it. Each ticket or PR is linked to a skill, and the skill runs as an agent in the right place.
-
-The layout's **Work panel** (the `hub` mod) lists your tickets and PRs. Each row has a button that starts its skill in a new Claude tab, in the ticket's worktree. The agent shows up in the sidebar, and the row shows its status.
-
-Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
-
-A repo can bring its own skills. With a terminal in the repo focused, **+ Add skill** also lists the repo's `.claude/skills` and `.claude/commands/*.md`, tagged with the repo's name. Rows offer a repo skill, its key and its case default only while that repo is focused.
-
-## On-call
-
-The **On-call** tab watches Sentry in the background and notifies you only about issues in your domain, each with an AI report and a suggested fix. Set it up in ⚙ settings › On-call. See [mods/hub/oncall](mods/hub/oncall/README.md).
-
-## Community mods
-
-| Mod                                                                                  | What it does                                                                                                     |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| [herdr-code-review](https://github.com/sangit0/herdr-code-review) (`tabbed-changes`) | Source control panel in the Changes slot: changed files and diffs open in tabs, plus history and review comments |
-| [herdr-revive](https://github.com/dmazlum/herdr-revive)                              | Brings back the agent a terminal lost after a restart, and forks a live one                                      |
-| [herdr-auto-title](https://github.com/kryptamine/herdr-auto-title)                   | Service behind `auto-title` that names tabs from what the agent is doing                                         |
+- **Work panel:** your tickets and PRs, each with its skill and the agent's status.
+- **On-call:** watches Sentry and notifies you only about issues in your domain, with an AI report and a fix. [More](mods/hub/oncall/README.md)
+- **Repo skills:** a repo's own `.claude/skills` show up while you work in it.
+- **Community mods:** [code review](https://github.com/sangit0/herdr-code-review), [revive](https://github.com/dmazlum/herdr-revive) and [auto-title](https://github.com/kryptamine/herdr-auto-title) included.
 
 ## Install
 
@@ -36,33 +29,9 @@ cd gh44-omnia
 ./install.sh
 ```
 
-It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`. Then pick the skills each row runs in the Work panel's ⚙ settings.
+Then pick the skills each row runs in the Work panel's ⚙ settings. Your old files are kept as `<name>.bak-<time>`; `./uninstall.sh` puts them back.
 
-To remove it:
-
-```sh
-./uninstall.sh
-```
-
-## Optional
-
-- **Theme:** clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo before installing, for the `gh44-dark` and `gh44-light` themes.
-- **Skills:** install [gh44-brain](https://github.com/gentrithalili1/gh44-brain) for the gh44 skills the Work panel runs. It also sets up its own `CLAUDE.md` and rules.
-
-## What's here
-
-| Path                         | What                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------- |
-| `layouts/gh44-omnia.json`    | The layout                                                                            |
-| `keys.json`, `settings.json` | Keys and settings                                                                     |
-| `mods/`                      | gh44 mods: `hub` (work panel), `gh44-omnia-tabs` (tab bar), `auto-title` (names tabs) |
-| `mods.txt`                   | Mods without an installer, copied from GitHub                                         |
-| `plugins.txt`                | Mods with their own installer                                                         |
-| `install.sh`                 | Sets up this machine                                                                  |
-| `uninstall.sh`               | Removes it all and brings back your old keys and settings                             |
-| `sync.sh`                    | Copies the live layout, keys and settings back here                                   |
-| `reload.sh`                  | Reloads the linked mods                                                               |
-| `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                              |
+Optional: [gh44-theme](https://github.com/gentrithalili1/gh44-theme) (clone next to this repo first) and [gh44-brain](https://github.com/gentrithalili1/gh44-brain) for the gh44 skills.
 
 ## Screenshots
 
@@ -90,3 +59,14 @@ To remove it:
     <td align="center"><img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="220"></td>
   </tr>
 </table>
+
+## What's here
+
+| Path                         | What                                                          |
+| ---------------------------- | ------------------------------------------------------------- |
+| `layouts/gh44-omnia.json`    | The layout                                                    |
+| `keys.json`, `settings.json` | Keys and settings                                             |
+| `mods/`                      | `hub` (Work panel), `gh44-omnia-tabs` (tab bar), `auto-title` |
+| `install.sh`, `uninstall.sh` | Set up or remove it                                           |
+| `sync.sh`, `reload.sh`       | Copy the live setup back here; reload the mods                |
+| `tests/`                     | `node --test tests/*.test.js`                                 |
