@@ -74,7 +74,7 @@ export const MAX_DOMAIN_LENGTH = 8_000;
 // The "is this mine?" check is a quick yes or no: the cheapest model does it.
 /** @type {Model} */
 export const DOMAIN_MODEL = "haiku";
-// The triage skill bundled with the service (oncall-service/skills/oncall-triage), the default.
+// The triage skill bundled with the service (oncall/skills/oncall-triage), the default.
 export const BUILT_IN_TRIAGE_SKILL = "oncall-triage";
 
 // Rules a new setup starts with: the noise join-oncall learned to skip.

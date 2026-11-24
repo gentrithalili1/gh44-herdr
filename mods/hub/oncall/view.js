@@ -4,19 +4,19 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, TextView } from "gpui-base";
 import { theme, shared, setShared, notify, run, closeOverlay, props, spaces } from "herdr";
-import { icon, palette, stop, GUTTER, MONO_FONT } from "./ui.js";
-import { getMissingSetup } from "./oncall-config.js";
-import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "./settings.js";
+import { icon, palette, stop, GUTTER, MONO_FONT } from "../ui.js";
+import { getMissingSetup } from "./config.js";
+import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "../settings.js";
 import {
   ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
-} from "./oncall-decisions.js";
+} from "./decisions.js";
 import {
   loadOncallConfig, loadServiceStatus, loadDecisions, hasSentryToken, touchHeartbeat, playAlertSound,
   requestCheckNow, requestRerun, openReport, continueInClaude, startOncall,
-} from "./oncall.js";
+} from "./client.js";
 
-/** @typedef {import("./oncall-decisions.js").Decision} Decision */
-/** @typedef {import("./oncall-decisions.js").OncallViewId} OncallViewId */
+/** @typedef {import("./decisions.js").Decision} Decision */
+/** @typedef {import("./decisions.js").OncallViewId} OncallViewId */
 
 const STORE = {
   seen: "hub.oncall.seen",
@@ -55,10 +55,10 @@ const OUTCOME_TIP = { reported: "Needs attention", ignored: "Not for you", held:
 
 // Kept at module scope, so a new panel copy shows the last read at once.
 const state = {
-  /** @type {import("./oncall-config.js").OncallConfig | null} */
+  /** @type {import("./config.js").OncallConfig | null} */
   config: null,
   hasToken: false,
-  /** @type {import("./oncall.js").ServiceStatus | null} */
+  /** @type {import("./client.js").ServiceStatus | null} */
   service: null,
   /** @type {Decision[]} */
   decisions: [],
@@ -102,7 +102,7 @@ const getRerunning = () => {
 /** @param {Decision} decision */
 const markRerunning = (decision) => setShared(STORE.rerunning, { ...getRerunning(), [decision.issueId]: new Date().toISOString() });
 // The saved filters over the defaults; a value of the wrong kind falls back to its default.
-/** @returns {import("./oncall-decisions.js").OncallFilters} */
+/** @returns {import("./decisions.js").OncallFilters} */
 const getOncallFilters = () => {
   const saved = shared(ONCALL_FILTERS_STORE);
   const s = saved && typeof saved === "object" && !Array.isArray(saved) ? Object.fromEntries(Object.entries(saved)) : {};
@@ -121,7 +121,7 @@ const getOncallFilters = () => {
 /** @typedef {"report" | "claude" | "seen" | "unseen" | "rerun" | "sentry"} OncallActionId */
 /** @typedef {{ claudePath: string | null, codeFolder: string | null }} RunConfig */
 // What every row of one render reads.
-/** @typedef {{ rowSkills: import("./settings.js").Skills, rerunning: Record<string, string>, runConfig: RunConfig, currentShortId: string | null, now: number }} RowContext */
+/** @typedef {{ rowSkills: import("../settings.js").Skills, rerunning: Record<string, string>, runConfig: RunConfig, currentShortId: string | null, now: number }} RowContext */
 // Rows drawn at first and added by each "Show more".
 const ROW_PAGE = 50;
 /** @typedef {{ decision: Decision, config: RunConfig, actions: { id: OncallActionId, label: string, icon: string }[], skills: string[] }} OncallMenu */
@@ -359,7 +359,7 @@ export class OncallView {
   }
 
   // ● Listening to 5 projects · next check in 29s · [Check now] [Go on call]
-  /** @param {{ config: import("./oncall-config.js").OncallConfig }} params */
+  /** @param {{ config: import("./config.js").OncallConfig }} params */
   statusBar({ config }) {
     const t = theme();
     const colors = palette(t);
@@ -460,12 +460,12 @@ export class OncallView {
   }
 
   // The Filters menu: like the GitHub and Linear tabs', over the decisions on disk.
-  /** @param {import("./oncall-decisions.js").OncallFilters} filters */
+  /** @param {import("./decisions.js").OncallFilters} filters */
   filterDefs(filters) {
     // The projects picked in settings, and any older decisions came from.
     const picked = state.config?.projects.map((p) => p.slug) ?? [];
     const projects = [...new Set([...picked, ...state.decisions.map((d) => d.project), ...filters.projects].filter(Boolean))].sort();
-    /** @type {{ title: string, field: keyof import("./oncall-decisions.js").OncallFilters, isMulti: boolean, options: { value: string, label: string }[] }[]} */
+    /** @type {{ title: string, field: keyof import("./decisions.js").OncallFilters, isMulti: boolean, options: { value: string, label: string }[] }[]} */
     const defs = [
       { title: "Severity", field: "severities", isMulti: true, options: SEVERITY_OPTIONS },
       { title: "Project", field: "projects", isMulti: true, options: projects.map((p) => ({ value: p, label: p })) },
@@ -621,11 +621,11 @@ export class ReportView {
   }
 
   // Removed lines on red, added on green, file and hunk lines dimmed; one line per row, scrolling sideways.
-  /** @param {{ id: string, lines: { kind: import("./oncall-decisions.js").DiffLineKind, text: string }[] }} params */
+  /** @param {{ id: string, lines: { kind: import("./decisions.js").DiffLineKind, text: string }[] }} params */
   diffBlock({ id, lines }) {
     const t = theme();
     const colors = palette(t);
-    /** @param {import("./oncall-decisions.js").DiffLineKind} kind */
+    /** @param {import("./decisions.js").DiffLineKind} kind */
     const look = (kind) => {
       switch (kind) {
         case "add": return { bg: `${colors.success}26`, color: colors.success };

@@ -1,7 +1,7 @@
 // The On-call tab's view of the service's decisions: today's numbers, what needs you, search.
 // Pure, so tests/ can load it without Herdr.
 
-/** @typedef {import("./oncall-service/triage.mjs").Decision} Decision */
+/** @typedef {import("./service/triage.mjs").Decision} Decision */
 /** @typedef {"attention" | "all" | "filtered"} OncallViewId */
 /** @typedef {{ triaged: number, filtered: number, investigated: number, unseen: number, costUsd: number }} TodayStats */
 

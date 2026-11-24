@@ -1,10 +1,10 @@
 // On-call I/O for the panel: the saved setup, the Sentry token and starting or stopping the
-// background service under herdr-core. The service (oncall-service/main.mjs) does the Sentry calls;
+// background service under herdr-core. The service (oncall/service/main.mjs) does the Sentry calls;
 // the panel runs it for one-off answers (orgs, projects) and reads the files it writes.
 // The token sits in a file only the user can read, like the Linear key.
 import { exec, hc, run, appHome, readTextFile, writeTextFile, spaces } from "herdr";
-import { readOncallConfig, SERVICE_NAME } from "./oncall-config.js";
-import { readDecisions } from "./oncall-decisions.js";
+import { readOncallConfig, SERVICE_NAME } from "./config.js";
+import { readDecisions } from "./decisions.js";
 
 const getDataFolder = () => `${appHome()}/hub`;
 const getOncallFolder = () => `${getDataFolder()}/oncall`;
@@ -15,7 +15,7 @@ const getDecisionsFile = () => `${getOncallFolder()}/decisions.json`;
 const getRequestsFolder = () => `${getOncallFolder()}/requests`;
 const getHeartbeatFile = () => `${getOncallFolder()}/heartbeat`;
 const ALERT_SOUND = "/System/Library/Sounds/Glass.aiff";
-const getServiceFile = () => `${appHome()}/mods/hub/oncall-service/main.mjs`;
+const getServiceFile = () => `${appHome()}/mods/hub/oncall/service/main.mjs`;
 const SERVICE_TIMEOUT_MS = 120_000;
 // The repo scan reads the repo with the AI: give it longer.
 const SCAN_TIMEOUT_MS = 600_000;
@@ -27,7 +27,7 @@ const FROM_LOGIN_SHELL = 'exec "${SHELL:-/bin/zsh}" -lic "$0" 2>/dev/null';
 const NO_NODE = "Node.js was not found. Install Node 22 or newer.";
 const NO_CLAUDE = "Claude Code (claude) was not found. Install it to run the AI triage.";
 
-/** @typedef {import("./oncall-config.js").OncallConfig} OncallConfig */
+/** @typedef {import("./config.js").OncallConfig} OncallConfig */
 /** @typedef {{ status: "error", reason: "auth" | "failed" | "noNode", message?: string }} OncallError */
 /**
  * @typedef {{
@@ -104,7 +104,7 @@ async function runServiceCommand({ args, config, timeout = SERVICE_TIMEOUT_MS })
 }
 
 // Checks the token with Sentry first and keeps it only when Sentry accepts it.
-/** @param {string} token @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./oncall-config.js").SentryOrg[] }>} */
+/** @param {string} token @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").SentryOrg[] }>} */
 export async function saveSentryToken(token) {
   const value = token.trim();
   if (!/^\S+$/.test(value)) return { status: "error", reason: "failed", message: "Paste the token as one word, without spaces" };
@@ -137,13 +137,13 @@ export async function removeSentryToken() {
 }
 
 // Who the saved token is and its orgs.
-/** @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./oncall-config.js").SentryOrg[] }>} */
+/** @returns {Promise<OncallError | { status: "success", user: string | null, orgs: import("./config.js").SentryOrg[] }>} */
 export async function loadSentryAccount() {
   if (!(await hasSentryToken())) return { status: "error", reason: "auth" };
   return runServiceCommand({ args: ["orgs"], config: await loadOncallConfig() });
 }
 
-/** @returns {Promise<OncallError | { status: "success", projects: import("./oncall-config.js").SentryProject[] }>} */
+/** @returns {Promise<OncallError | { status: "success", projects: import("./config.js").SentryProject[] }>} */
 export async function loadSentryProjects() {
   return runServiceCommand({ args: ["projects"], config: await loadOncallConfig() });
 }
@@ -206,7 +206,7 @@ export async function resumeOncall() {
   return r.status === "success" ? { status: "success" } : r;
 }
 
-/** @returns {Promise<import("./oncall-decisions.js").Decision[]>} */
+/** @returns {Promise<import("./decisions.js").Decision[]>} */
 export async function loadDecisions() {
   return readDecisions(parseJson(await readTextFile(getDecisionsFile())));
 }
@@ -228,7 +228,7 @@ export const touchHeartbeat = () => exec("sh", ["-c", 'mkdir -p "$0" && touch "$
 export const playAlertSound = () => exec("afplay", [ALERT_SOUND]);
 
 // The AI's report as a markdown tab of its own.
-/** @param {import("./oncall-decisions.js").Decision} decision */
+/** @param {import("./decisions.js").Decision} decision */
 export function openReport(decision) {
   if (!decision.reportPath) return false;
   // In its own tab; a report already open in the shown space is switched to instead.
@@ -244,7 +244,7 @@ export function openReport(decision) {
 }
 
 // Picks up the triage's Claude session in a new tab, in the folder it ran in.
-/** @param {{ decision: import("./oncall-decisions.js").Decision, config: { claudePath: string | null } }} params */
+/** @param {{ decision: import("./decisions.js").Decision, config: { claudePath: string | null } }} params */
 export function continueInClaude({ decision, config }) {
   if (!decision.sessionId) return false;
   const argv = [config.claudePath ?? "claude", "--resume", decision.sessionId];
@@ -272,7 +272,7 @@ export async function testDomain() {
 }
 
 // The setup scan of the saved repo folder: CODEOWNERS, the Sentry noise rules and an AI summary.
-/** @returns {Promise<OncallError | { status: "success", profile: import("./oncall-config.js").RepoProfile }>} */
+/** @returns {Promise<OncallError | { status: "success", profile: import("./config.js").RepoProfile }>} */
 export async function scanRepo() {
   const config = await loadOncallConfig();
   const claude = await findClaude(config);

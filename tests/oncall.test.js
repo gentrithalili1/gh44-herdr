@@ -3,19 +3,19 @@ import assert from "node:assert/strict";
 import {
   readOncallConfig, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
   POLL_MINUTES, NOTIFY_SEVERITY_OPTIONS, BUILT_IN_TRIAGE_SKILL,
-} from "../mods/hub/oncall-config.js";
+} from "../mods/hub/oncall/config.js";
 import { readFileSync } from "node:fs";
-import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall-service/alerts.mjs";
-import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall-service/triage.mjs";
-import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall-service/repo-scan.mjs";
-import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall-decisions.js";
+import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall/service/alerts.mjs";
+import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall/service/triage.mjs";
+import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall/service/repo-scan.mjs";
+import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall/decisions.js";
 
 const org = { slug: "acme", name: "Acme", regionUrl: "https://de.sentry.io" };
 const web = { id: "1", slug: "web" };
 const api = { id: "2", slug: "api" };
 const config = readOncallConfig({ isOn: true, org, projects: [web] });
 
-/** @param {Partial<import("../mods/hub/oncall-service/alerts.mjs").Alert>} patch */
+/** @param {Partial<import("../mods/hub/oncall/service/alerts.mjs").Alert>} patch */
 const alert = (patch = {}) => ({
   id: "42", shortId: "WEB-1A", title: "TypeError: x is undefined", culprit: "app/job.tsx", level: "error", priority: "high",
   project: "web", url: "https://acme.sentry.io/issues/42/", kind: "new", firstSeen: "2026-11-23T08:00:00Z", lastSeen: "2026-11-23T10:00:00Z",
@@ -245,7 +245,7 @@ test("an issue outside the domain lands in Filtered, not Needs you", () => {
 
 test("the built-in triage skill is the default and goes into the prompt as text, without its frontmatter", () => {
   assert.equal(readOncallConfig({}).triageSkill, BUILT_IN_TRIAGE_SKILL);
-  const skill = readFileSync(new URL("../mods/hub/oncall-service/skills/oncall-triage/SKILL.md", import.meta.url), "utf8");
+  const skill = readFileSync(new URL("../mods/hub/oncall/skills/oncall-triage/SKILL.md", import.meta.url), "utf8");
   assert.match(skill, /^---\nname: oncall-triage\n/);
   const guide = stripFrontmatter(skill);
   assert.ok(guide.startsWith("# On-call triage"));

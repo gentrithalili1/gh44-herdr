@@ -2,7 +2,7 @@
 // and denyUrls), the prompt for the short AI read of the rest, and how the result goes into a
 // triage prompt. Pure, so tests/ can load it.
 
-/** @typedef {import("../oncall-config.js").RepoProfile} RepoProfile */
+/** @typedef {import("../config.js").RepoProfile} RepoProfile */
 /** @typedef {{ codeowners: string, codeownersPath: string | null, sentryFiles: string[], ignoreErrors: string[], denyUrls: string[], spreads: string[] }} RepoFacts */
 
 export const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];

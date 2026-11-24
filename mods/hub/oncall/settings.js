@@ -3,19 +3,19 @@
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
 import { theme, notify, pickFolder, shared, setShared } from "herdr";
-import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./oncall-decisions.js";
-import { openOncallTextDialog, ONCALL_TEXT_SAVED_STORE } from "./oncall-text-dialog.js";
-import { icon, palette, stop, toAnchor, MONO_FONT } from "./ui.js";
+import { ONCALL_SHOW_TODAY_STORE, isTodayShown } from "./decisions.js";
+import { openOncallTextDialog, ONCALL_TEXT_SAVED_STORE } from "./text-dialog.js";
+import { icon, palette, stop, toAnchor, MONO_FONT } from "../ui.js";
 import {
   POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, SENTRY_PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
   DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
-} from "./oncall-config.js";
+} from "./config.js";
 import {
   loadOncallConfig, saveOncallConfig, hasSentryToken, saveSentryToken, removeSentryToken, loadSentryAccount,
   loadSentryProjects, loadServiceStatus, startOncall, stopOncall, playAlertSound, loadPreview, testDomain, scanRepo,
-} from "./oncall.js";
-import { loadInstalledSkills, loadRepoSkills } from "./actions.js";
-import { isValidSkillName } from "./settings.js";
+} from "./client.js";
+import { loadInstalledSkills, loadRepoSkills } from "../actions.js";
+import { isValidSkillName } from "../settings.js";
 
 /** @typedef {"sentryToken" | "nudgeRules" | "neverRules" | "environments"} OncallInputId */
 // Long texts show this many lines in settings; the rest opens in a dialog.
@@ -23,9 +23,9 @@ const PREVIEW_LINES = 3;
 /** @param {string} text */
 const capitalize = (text) => `${text[0]?.toUpperCase() ?? ""}${text.slice(1)}`;
 
-/** @typedef {import("./oncall-config.js").OncallConfig} OncallConfig */
-/** @typedef {import("./oncall-config.js").SentryOrg} SentryOrg */
-/** @typedef {import("./oncall-config.js").SentryProject} SentryProject */
+/** @typedef {import("./config.js").OncallConfig} OncallConfig */
+/** @typedef {import("./config.js").SentryOrg} SentryOrg */
+/** @typedef {import("./config.js").SentryProject} SentryProject */
 
 const SENTRY_TOKENS_URL = "https://sentry.io/settings/account/api/auth-tokens/";
 // While the section shows, the service's status is read this often.
@@ -50,9 +50,9 @@ const SETTING_SELECTS = {
 /** @typedef {keyof typeof SETTING_SELECTS} SettingSelect */
 // Picked projects named on the closed project select before it says "+N more".
 const PROJECTS_NAMED = 3;
-/** @type {import("./oncall-config.js").SetupStep[]} */
+/** @type {import("./config.js").SetupStep[]} */
 const SETUP_STEPS = ["token", "org", "projects", "repo", "domain"];
-/** @type {Record<import("./oncall-config.js").SetupStep, string>} */
+/** @type {Record<import("./config.js").SetupStep, string>} */
 const MISSING_SETUP = {
   token: "Save a Sentry token first.",
   org: "Pick an organization.",
@@ -79,7 +79,7 @@ export class OncallSettings {
    *   settingsGroup: (params: { title: string, description: string, children: any[] }) => any,
    *   settingsToggle: (params: { id: string, label: string, isOn: boolean, onToggle: (cx: import("gpui-kit").Context) => void }) => any,
    *   settingsChoice: (params: { id: string, label: string, isOn: boolean, onPick: (cx: import("gpui-kit").Context) => void }) => any,
-   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
+   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("../ui.js").Anchor | null }) => void,
    *   skillGroups: () => any[],
    * }} host
    */
@@ -100,7 +100,7 @@ export class OncallSettings {
     this.projectsLoading = new Set();
     /** @type {{ status: "idle" | "loading" | "success" | "failed", items: SentryProject[], message?: string }} */
     this.projects = { status: "idle", items: [] };
-    /** @type {import("./oncall.js").ServiceStatus | null} */
+    /** @type {import("./client.js").ServiceStatus | null} */
     this.service = null;
     this.statusReadAt = 0;
     /** @type {{ status: "idle" | "saving" | "failed", message?: string }} */
@@ -139,7 +139,7 @@ export class OncallSettings {
     /** @type {Set<SettingSelect>} */
     this.openSettingSelects = new Set();
     // The select field pressed last: its menu opens under it.
-    /** @type {import("./ui.js").Anchor | null} */
+    /** @type {import("../ui.js").Anchor | null} */
     this.selectAnchor = null;
     this.envInput = InputState.new({ placeholder: "production" });
     /** @type {[import("gpui-base").InputState, "environments"][]} */
@@ -448,7 +448,7 @@ export class OncallSettings {
     // Setup shows one step at a time: a step appears once the one before it is done, and the
     // rest of the settings once all of them are.
     const missing = getMissingSetup({ config, hasToken: isConnected });
-    /** @param {import("./oncall-config.js").SetupStep} step */
+    /** @param {import("./config.js").SetupStep} step */
     const isReached = (step) => missing === null || SETUP_STEPS.indexOf(step) <= SETUP_STEPS.indexOf(missing);
     const setup = [
       group({ title: "Sentry token", description: "A personal token with org:read, project:read and event:read. It stays on this machine, readable only by you.", children: this.tokenRows() }),
@@ -647,7 +647,7 @@ export class OncallSettings {
   }
 
   // The first lines of a long text, with "+N more lines" and an Edit button that opens it in a dialog.
-  /** @param {{ id: string, text: string, isMono: boolean, field: import("./oncall-text-dialog.js").OncallTextField }} params */
+  /** @param {{ id: string, text: string, isMono: boolean, field: import("./text-dialog.js").OncallTextField }} params */
   textPreview({ id, text, isMono, field }) {
     const t = theme();
     const lines = text.split("\n").filter((l) => l.trim());
@@ -800,7 +800,7 @@ export class OncallSettings {
   }
 
   // A rules list: on/off, the rule and ✕; then the field to add one, and suggestions not added yet.
-  /** @param {{ config: OncallConfig, list: import("./oncall-config.js").RuleList }} params */
+  /** @param {{ config: OncallConfig, list: import("./config.js").RuleList }} params */
   ruleRows({ config, list }) {
     const t = theme();
     const input = list === "nudgeRules" ? this.nudgeInput : this.neverInput;
@@ -827,7 +827,7 @@ export class OncallSettings {
     return [...rows, field, ...(suggestions.length ? [chips] : [])];
   }
 
-  /** @param {{ cx: import("gpui-kit").Context, list: import("./oncall-config.js").RuleList, text: string }} params */
+  /** @param {{ cx: import("gpui-kit").Context, list: import("./config.js").RuleList, text: string }} params */
   handleAddRule({ cx, list, text }) {
     if (!this.config || !text.trim()) return;
     const id = `${list === "nudgeRules" ? "nudge" : "never"}-${Date.now().toString(36)}`;
@@ -868,7 +868,7 @@ export class OncallSettings {
       .when(isBusy, (el) => el.child(svg(SPINNER).size(12).text_color(t.working).spin(900)))
       .when(!isBusy && !isDisabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.spawn(async (cx) => this.switchOncall({ cx, isOn: !isRunning })); }))
-      .when(isDisabled && missing !== null, (el) => el.tooltip(MISSING_SETUP[/** @type {import("./oncall-config.js").SetupStep} */ (missing)]))
+      .when(isDisabled && missing !== null, (el) => el.tooltip(MISSING_SETUP[/** @type {import("./config.js").SetupStep} */ (missing)]))
       .child(isBusy ? (this.switching === "starting" ? "Starting…" : "Stopping…") : isRunning ? "Go off call" : "Go on call");
     const rows = [h_flex().h(30).px(6).gap(8).items_center()
       .child(div().size(8).flex_none().rounded(4).bg(dot))

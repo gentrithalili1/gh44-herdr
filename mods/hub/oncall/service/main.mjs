@@ -17,7 +17,7 @@ import { readFile, writeFile, rename, mkdir, readdir, rm, stat } from "node:fs/p
 import { spawn, execFile } from "node:child_process";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { readOncallConfig, SENTRY_URL, DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL } from "../oncall-config.js";
+import { readOncallConfig, SENTRY_URL, DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL } from "../config.js";
 import { toAlert, toAlerts, toOrgs, toProjects, toEventContext, buildIssuesPath } from "./alerts.mjs";
 import { CODEOWNERS_PATHS, SENTRY_FILE_PATTERN, MAX_SENTRY_FILES, cleanCodeowners, collectNoiseRules, buildScanPrompt } from "./repo-scan.mjs";
 import {
@@ -166,7 +166,7 @@ async function listProjects() {
 /** @param {number} ms */
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** @typedef {import("../oncall-config.js").OncallConfig} OncallConfig */
+/** @typedef {import("../config.js").OncallConfig} OncallConfig */
 /** @typedef {import("./triage.mjs").Decision} Decision */
 /** @typedef {import("./alerts.mjs").Alert} Alert */
 
@@ -226,7 +226,7 @@ function runClaude({ config, prompt, cwd, model = config.model, isToolless = fal
   });
 }
 
-const BUILT_IN_SKILL_FILE = new URL("./skills/oncall-triage/SKILL.md", import.meta.url);
+const BUILT_IN_SKILL_FILE = new URL("../skills/oncall-triage/SKILL.md", import.meta.url);
 
 // The bundled triage skill's steps; "" when the file can't be read (the prompt still has the rules).
 async function readBuiltInGuide() {
@@ -461,7 +461,7 @@ async function scanRepo() {
   const facts = await readRepoFacts(folder);
   const run = await runClaude({ config, prompt: buildScanPrompt({ folder, facts }), cwd: folder, model: SCAN_MODEL });
   if (run.isError || !run.text.trim()) return { status: "error", reason: "failed", message: "The AI part of the scan gave no answer" };
-  /** @type {import("../oncall-config.js").RepoProfile} */
+  /** @type {import("../config.js").RepoProfile} */
   const profile = {
     folder, scannedAt: new Date().toISOString(), codeowners: facts.codeowners, sentryFiles: facts.sentryFiles,
     ignoreErrors: facts.ignoreErrors, denyUrls: facts.denyUrls, summary: run.text.trim(), costUsd: run.costUsd,

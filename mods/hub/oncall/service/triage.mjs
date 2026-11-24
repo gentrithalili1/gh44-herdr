@@ -1,11 +1,11 @@
 // What the service does with each alert: which ones to look at, the free filters, the prompt
 // for the AI and reading its verdict back. Pure, so tests/ can load it.
 
-import { BUILT_IN_TRIAGE_SKILL } from "../oncall-config.js";
+import { BUILT_IN_TRIAGE_SKILL } from "../config.js";
 import { formatRepoContext } from "./repo-scan.mjs";
 
-/** @typedef {import("../oncall-config.js").OncallConfig} OncallConfig */
-/** @typedef {import("../oncall-config.js").Severity} Severity */
+/** @typedef {import("../config.js").OncallConfig} OncallConfig */
+/** @typedef {import("../config.js").Severity} Severity */
 /** @typedef {import("./alerts.mjs").Alert} Alert */
 /** @typedef {import("./alerts.mjs").EventContext} EventContext */
 /** @typedef {"new" | "regressed" | "escalating" | "grew" | "rerun"} Trigger */
@@ -78,7 +78,7 @@ export function runFreeFilters({ alert, trigger, config }) {
   return null;
 }
 
-/** @param {import("../oncall-config.js").Rule[]} rules */
+/** @param {import("../config.js").Rule[]} rules */
 const formatRules = (rules) => {
   const on = rules.filter((r) => r.isOn);
   return on.length ? on.map((r) => `- ${r.text}`).join("\n") : "- (none)";

@@ -3,9 +3,9 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex, TextareaState, Textarea } from "gpui-base";
 import { theme, notify, props, openOverlay, closeOverlay, setShared } from "herdr";
-import { palette, stop, MONO_FONT } from "./ui.js";
-import { MAX_DOMAIN_LENGTH } from "./oncall-config.js";
-import { loadOncallConfig, saveOncallConfig } from "./oncall.js";
+import { palette, stop, MONO_FONT } from "../ui.js";
+import { MAX_DOMAIN_LENGTH } from "./config.js";
+import { loadOncallConfig, saveOncallConfig } from "./client.js";
 
 export const ONCALL_TEXT_DIALOG = "oncall-text";
 // Set to the save time after a save, so the open settings read the config again.
@@ -13,7 +13,7 @@ export const ONCALL_TEXT_SAVED_STORE = "hub.oncall.textSavedAt";
 const DIALOG_SIZE = { width: 640, height: 520 };
 
 /** @typedef {"domain" | "summary"} OncallTextField */
-/** @typedef {import("./oncall-config.js").OncallConfig} OncallConfig */
+/** @typedef {import("./config.js").OncallConfig} OncallConfig */
 
 /** @type {Record<OncallTextField, { title: string, description: string, placeholder: string, isMono: boolean }>} */
 const FIELDS = {

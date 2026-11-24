@@ -9,14 +9,14 @@ import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
 import { loadInstalledSkills, uninstallGh44Herdr } from "./actions.js";
 import { openGh44Dialog } from "./gh44-dialog.js";
 import { CaseEditor } from "./case-editor.js";
-import { OncallSettings } from "./oncall-settings.js";
+import { OncallSettings } from "./oncall/settings.js";
 import {
   addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS, LINEAR_SITUATIONS, ONCALL_SITUATIONS, canRunEntry, shortRepo,
   ASK_ACTION, ASK_DESCRIPTION, CONTINUE_ACTION, CONTINUE_DESCRIPTION,
 } from "./settings.js";
 
 /** @typedef {"general" | "github" | "linear" | "oncall"} SectionId */
-/** @typedef {"linearKey" | "skillKey" | "addSkill" | import("./oncall-settings.js").OncallInputId} InputId */
+/** @typedef {"linearKey" | "skillKey" | "addSkill" | import("./oncall/settings.js").OncallInputId} InputId */
 /**
  * @typedef {{
  *   login: string | null,
