@@ -141,13 +141,11 @@ const RERUN_TIMEOUT_MS = 15 * 60_000;
 export const isRerunPending = ({ decision, requestedAt, now }) =>
   Boolean(requestedAt) && decision.decidedAt < String(requestedAt) && now - Date.parse(String(requestedAt)) < RERUN_TIMEOUT_MS;
 
-// The countdown ring's icon (icons/countdown-00..24.svg): full right after a check, empty when
-// the next one is due.
-export const COUNTDOWN_STEPS = 24;
+// How much of the next-check ring is left: full right after a check, empty when the next one is due.
 /** @param {{ msLeft: number, periodMs: number }} params */
-export function getCountdownIcon({ msLeft, periodMs }) {
-  const fraction = periodMs > 0 ? Math.min(1, Math.max(0, msLeft / periodMs)) : 0;
-  return `countdown-${String(Math.ceil(fraction * COUNTDOWN_STEPS)).padStart(2, "0")}`;
+export function getCountdownLeft({ msLeft, periodMs }) {
+  if (periodMs <= 0) return 0;
+  return Math.min(1, Math.max(0, msLeft / periodMs));
 }
 
 // A Check now runs until the service writes its next check time (it does once the check, AI

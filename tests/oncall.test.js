@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall-service/alerts.mjs";
 import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall-service/triage.mjs";
 import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall-service/repo-scan.mjs";
-import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownIcon, isCheckPending, splitReport } from "../mods/hub/oncall-decisions.js";
+import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall-decisions.js";
 
 const org = { slug: "acme", name: "Acme", regionUrl: "https://de.sentry.io" };
 const web = { id: "1", slug: "web" };
@@ -342,12 +342,11 @@ test("the filters narrow any view by severity, project, decided by, time and see
 });
 
 test("the countdown ring is full right after a check and empty when the next one is due", () => {
-  assert.equal(getCountdownIcon({ msLeft: 120_000, periodMs: 120_000 }), "countdown-24");
-  assert.equal(getCountdownIcon({ msLeft: 60_000, periodMs: 120_000 }), "countdown-12");
-  assert.equal(getCountdownIcon({ msLeft: 1_000, periodMs: 120_000 }), "countdown-01");
-  assert.equal(getCountdownIcon({ msLeft: 0, periodMs: 120_000 }), "countdown-00");
-  assert.equal(getCountdownIcon({ msLeft: 999_999, periodMs: 120_000 }), "countdown-24");
-  for (let k = 0; k <= 24; k += 1) assert.ok(readFileSync(new URL(`../mods/hub/icons/countdown-${String(k).padStart(2, "0")}.svg`, import.meta.url), "utf8").startsWith("<svg"));
+  assert.equal(getCountdownLeft({ msLeft: 120_000, periodMs: 120_000 }), 1);
+  assert.equal(getCountdownLeft({ msLeft: 60_000, periodMs: 120_000 }), 0.5);
+  assert.equal(getCountdownLeft({ msLeft: 0, periodMs: 120_000 }), 0);
+  assert.equal(getCountdownLeft({ msLeft: 999_999, periodMs: 120_000 }), 1);
+  assert.equal(getCountdownLeft({ msLeft: 5, periodMs: 0 }), 0);
 });
 
 test("Check now spins until the service writes a new next check time, for at most 15 minutes", () => {

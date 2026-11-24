@@ -1,14 +1,14 @@
 // The On-call tab: today's numbers, what the AI decided, and an all-clear while nothing needs you.
 // It reads the files the background service writes, toasts new nudges, and keeps the service's
 // heartbeat fresh so alerts show in Herdr while it is open. Rows use the panel's own row pieces.
-import { div, svg } from "gpui-kit";
+import { div, svg, PathBuilder, Background } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input, TextView } from "gpui-base";
 import { theme, shared, setShared, notify, run, closeOverlay, props, spaces } from "herdr";
 import { icon, palette, stop, GUTTER, MONO_FONT } from "./ui.js";
 import { getMissingSetup } from "./oncall-config.js";
 import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "./settings.js";
 import {
-  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownIcon, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
+  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
 } from "./oncall-decisions.js";
 import {
   loadOncallConfig, loadServiceStatus, loadDecisions, hasSentryToken, touchHeartbeat, playAlertSound,
@@ -35,6 +35,9 @@ const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const SPINNER = "mods/workspace-chrome/spinner.svg";
+const COUNTDOWN_SIZE = 12;
+const COUNTDOWN_STROKE = 1.5;
+const COUNTDOWN_TRACK_OPACITY = 0.25;
 // The all-clear badge and its rings.
 const BADGE_SIZE = 64;
 const RING_FROM = 64;
@@ -378,11 +381,32 @@ export class OncallView {
     return h_flex().id("oncall-status").h(26).gap(8).items_center()
       .when(Boolean(current), (el) => el.tooltip(current ? `The AI is triaging ${current.shortId}: ${current.title}` : "")
         .child(svg(SPINNER).size(12).flex_none().text_color(t.working).spin(900)))
-      .when(isCountingDown, (el) => el.child(svg(icon(getCountdownIcon({ msLeft: nextIn ?? 0, periodMs: config.pollMinutes * MINUTE_MS }))).size(12).flex_none().text_color(colors.success)))
+      .when(isCountingDown, (el) => el.child(this.countdownRing(getCountdownLeft({ msLeft: nextIn ?? 0, periodMs: config.pollMinutes * MINUTE_MS }))))
       .when(!isCountingDown && !current, (el) => el.child(div().size(8).flex_none().rounded(4).bg(dot)))
       .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(service?.lastError ? colors.warning : t.muted).child(text))
       .when(isRunning, (el) => el.child(this.smallButton({ id: "oncall-check-now", label: isChecking() ? "Checking…" : "Check now", isLoading: isChecking(), onClick: (cx) => this.handleCheckNow(cx) })))
       .when(!isRunning && !config.isOn, (el) => el.child(this.smallButton({ id: "oncall-go-on", label: state.isStarting ? "Starting…" : "Go on call", isAccent: true, onClick: (cx) => this.handleGoOnCall(cx) })));
+  }
+
+  // A ring drawn as a path: a faint full circle, and the arc that is `left` (0 to 1) of it,
+  // clockwise from the top.
+  /** @param {number} left */
+  countdownRing(left) {
+    const green = palette(theme()).success;
+    const c = COUNTDOWN_SIZE / 2;
+    const r = c - COUNTDOWN_STROKE;
+    const top = /** @type {const} */ ([c, c - r]);
+    const bottom = /** @type {const} */ ([c, c + r]);
+    // A full circle is two half arcs: one arc_to cannot end where it starts.
+    const track = PathBuilder.stroke(COUNTDOWN_STROKE).move_to(...top).arc_to(r, r, 0, false, true, ...bottom).arc_to(r, r, 0, false, true, ...top).build();
+    const angle = left * 2 * Math.PI;
+    const end = [c + r * Math.sin(angle), c - r * Math.cos(angle)];
+    const arc = left >= 1 ? track
+      : PathBuilder.stroke(COUNTDOWN_STROKE).move_to(...top).arc_to(r, r, 0, left > 0.5, true, end[0], end[1]).build();
+    const layer = (/** @type {import("gpui-kit").Path} */ path, /** @type {import("gpui-kit").Background} */ bg) => window.paint_path(path, bg).absolute().top(0).left(0).size_full();
+    return div().relative().size(COUNTDOWN_SIZE).flex_none()
+      .child(layer(track, Background.solid(green).opacity(COUNTDOWN_TRACK_OPACITY)))
+      .when(left > 0, (el) => el.child(layer(arc, Background.solid(green))));
   }
 
   /** @param {import("gpui-kit").Context} cx */
