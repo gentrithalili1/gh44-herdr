@@ -4,13 +4,13 @@
 
 **Your tickets, your code and the agents that work on them, in one Herdr window. Pick a ticket, start a skill, and watch the agent do it in the right worktree.**
 
-You jump between Linear, GitHub, a terminal per repo and a Claude tab per task, and you lose track of what runs where. gh44-omnia is a setup for the [Herdr app](https://herdr.dev) that puts it all in one layout. The **Work panel** lists your Linear tickets and GitHub PRs; each row starts its skill as a Claude agent in the ticket's worktree and shows how it goes. The **On-call** tab watches Sentry while you are on call and only tells you about the issues in your domain, with an AI report and a suggested fix. Repo skills, the gh44 themes and the gh44-brain skills are one click away.
+You jump between Linear, GitHub, a terminal per repo and a Claude tab per task, and you lose track of what runs where. gh44-omnia is a setup for the [Herdr app](https://herdr.dev) that puts it all in one layout. The **Omnia panel** lists your Linear tickets and GitHub PRs; each row starts its skill as a Claude agent in the ticket's worktree and shows how it goes. The **On-call** tab watches Sentry while you are on call and only tells you about the issues in your domain, with an AI report and a suggested fix. Repo skills, the gh44 themes and the gh44-brain skills are one click away.
 
-## Work panel
+## Omnia panel
 
 One window for the whole loop: the work to do (Linear tickets, GitHub PRs), the code (spaces and worktrees), and the agents that work on it. Each ticket or PR is linked to a skill, and the skill runs as an agent in the right place.
 
-The layout's **Work panel** (the `hub` mod) lists your tickets and PRs. Each row has a button that starts its skill in a new Claude tab, in the ticket's worktree. The agent shows up in the sidebar, and the row shows its status.
+The layout's **Omnia panel** (the `hub` mod) lists your tickets and PRs. Each row has a button that starts its skill in a new Claude tab, in the ticket's worktree. The agent shows up in the sidebar, and the row shows its status.
 
 Pick the skills in the panel's ⚙ settings: your own, or the gh44 ones from [gh44-brain](https://github.com/gentrithalili1/gh44-brain). A row without an installed skill shows `open`, which opens the PR or ticket.
 
@@ -38,7 +38,7 @@ cd gh44-omnia
 ./install.sh
 ```
 
-It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`. Then pick the skills each row runs in the Work panel's ⚙ settings.
+It installs the mods, keys, settings and layout. Your old files are kept as `<name>.bak-<time>`. Then pick the skills each row runs in the Omnia panel's ⚙ settings.
 
 To remove it:
 
@@ -49,34 +49,34 @@ To remove it:
 ## Optional
 
 - **Theme:** clone [gh44-theme](https://github.com/gentrithalili1/gh44-theme) next to this repo before installing, for the `gh44-dark` and `gh44-light` themes.
-- **Skills:** install [gh44-brain](https://github.com/gentrithalili1/gh44-brain) for the gh44 skills the Work panel runs. It also sets up its own `CLAUDE.md` and rules.
+- **Skills:** install [gh44-brain](https://github.com/gentrithalili1/gh44-brain) for the gh44 skills the Omnia panel runs. It also sets up its own `CLAUDE.md` and rules.
 
 ## What's here
 
-| Path                         | What                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------- |
-| `layouts/gh44-omnia.json`    | The layout                                                                            |
-| `keys.json`, `settings.json` | Keys and settings                                                                     |
-| `mods/`                      | gh44 mods: `hub` (work panel), `gh44-omnia-tabs` (tab bar), `auto-title` (names tabs) |
-| `mods.txt`                   | Mods without an installer, copied from GitHub                                         |
-| `plugins.txt`                | Mods with their own installer                                                         |
-| `install.sh`                 | Sets up this machine                                                                  |
-| `uninstall.sh`               | Removes it all and brings back your old keys and settings                             |
-| `sync.sh`                    | Copies the live layout, keys and settings back here                                   |
-| `reload.sh`                  | Reloads the linked mods                                                               |
-| `tests/`                     | Work panel settings tests: `node --test tests/*.test.js`                              |
+| Path                         | What                                                                                   |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `layouts/gh44-omnia.json`    | The layout                                                                             |
+| `keys.json`, `settings.json` | Keys and settings                                                                      |
+| `mods/`                      | gh44 mods: `hub` (Omnia panel), `gh44-omnia-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods.txt`                   | Mods without an installer, copied from GitHub                                          |
+| `plugins.txt`                | Mods with their own installer                                                          |
+| `install.sh`                 | Sets up this machine                                                                   |
+| `uninstall.sh`               | Removes it all and brings back your old keys and settings                              |
+| `sync.sh`                    | Copies the live layout, keys and settings back here                                    |
+| `reload.sh`                  | Reloads the linked mods                                                                |
+| `tests/`                     | Omnia panel settings tests: `node --test tests/*.test.js`                              |
 
 ## Screenshots
 
 <table>
   <tr>
-    <th>Work panel</th>
+    <th>Omnia panel</th>
     <th>On-call</th>
     <th>Filters</th>
     <th>Clean up</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/work-panel.png" alt="Work panel with a PR row and its skill menu" width="220"></td>
+    <td align="center"><img src="docs/work-panel.png" alt="Omnia panel with a PR row and its skill menu" width="220"></td>
     <td align="center"><img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="220"></td>
     <td align="center"><img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="220"></td>
     <td align="center"><img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="220"></td>

@@ -13,7 +13,7 @@ async function startIssue(issue) {
     notify({ title: `${issue.identifier} moved to ${r.state}`, level: "info" });
     return;
   }
-  const body = r.reason === "auth" ? "Add your Linear API key in the Work panel's ⚙ settings." : r.message;
+  const body = r.reason === "auth" ? "Add your Linear API key in the Omnia panel's ⚙ settings." : r.message;
   notify({ title: `Could not move ${issue.identifier} to In Progress`, body, level: "warning" });
 }
 

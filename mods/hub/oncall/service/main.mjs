@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The On-call service: polls the issue tracker for the picked projects, runs free filters and an AI triage
-// on what is left, and writes decisions and reports to disk, where the Work panel reads them.
+// on what is left, and writes decisions and reports to disk, where the Omnia panel reads them.
 // It runs under herdr-core (`hc run --name gh44-oncall`), so it keeps going while the Herdr
 // window is closed, and stops when you go off call.
 //

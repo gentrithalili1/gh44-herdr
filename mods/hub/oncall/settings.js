@@ -945,7 +945,7 @@ export class OncallSettings {
     const picked = config.projects.map((p) => p.slug);
     const named = picked.slice(0, PROJECTS_NAMED).join(", ");
     const more = picked.length > PROJECTS_NAMED ? ` +${picked.length - PROJECTS_NAMED} more` : "";
-    // [web, api, mobile +2 more ▾]: the Work panel's multi-select with search; picked ones list first.
+    // [web, api, mobile +2 more ▾]: the Omnia panel's multi-select with search; picked ones list first.
     const select = h_flex().id("oncall-projects").h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.input).bg(t.background)
       .cursor_pointer().hover((s) => s.bg(t.hover))
       .on_mouse_down("left", (e) => { this.selectAnchor = toAnchor(e); })
