@@ -1,15 +1,20 @@
 // The On-call tab: today's numbers, what the AI decided, and an all-clear while nothing needs you.
 // It reads the files the background service writes, toasts new nudges, and keeps the service's
-// heartbeat fresh so alerts show in Herdr while it is open. Rows use the panel's own row pieces.
+// heartbeat fresh so alerts show in Herdr while it is open. Rows are the panel's strips.
 import { div, svg } from "gpui-kit";
-import { h_flex, v_flex, InputState, Input, TextView } from "gpui-base";
-import { theme, shared, setShared, notify, run, closeOverlay, props, spaces } from "herdr";
-import { icon, palette, stop, GUTTER, MONO_FONT } from "../ui.js";
+import { h_flex, v_flex, InputState, TextView } from "gpui-base";
+import { theme, shared, setShared, notify, run, spaces } from "herdr";
+import { icon, palette, GUTTER, MONO_FONT } from "../ui.js";
+import { bay, button, statusLine } from "../controls.js";
 import { getMissingSetup } from "./config.js";
 import { getProvider } from "./providers/catalog.js";
-import { getOncallSituation, getCaseActions, getDefaultSkill, shortSkill, ASK_ACTION, CONTINUE_ACTION } from "../settings.js";
+import { getOncallSituation, getCaseActions, getDefaultSkill, getCaseRun, ASK_ACTION, CONTINUE_ACTION } from "../settings.js";
+import { getOncallRowAction, getOncallRowMenu, getDecisionFacts, getRowDetails, getCaseRunPlace } from "../row-action.js";
+import { getCaseLook, getCaseLabel } from "../case-editor.js";
+import { openRowDetails } from "../row-details.js";
+import { focusAgent } from "../actions.js";
 import {
-  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, getDecidedBy, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
+  ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
 } from "./decisions.js";
 import {
   loadOncallConfig, loadServiceStatus, loadDecisions, hasTrackerToken, touchHeartbeat, playAlertSound,
@@ -35,7 +40,6 @@ const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
-const SPINNER = "mods/workspace-chrome/spinner.svg";
 const COUNTDOWN_BAR_HEIGHT = 2;
 // The all-clear badge and its rings.
 const BADGE_SIZE = 64;
@@ -43,16 +47,20 @@ const RING_FROM = 64;
 const RING_TO = 150;
 const RING_PERIOD_MS = 2_600;
 const HERO_HEIGHT = 180;
-// Severity: its icon, tone and toast level.
-/** @type {Record<string, { icon: string, tone: string, level: "error" | "warning" | "info" }>} */
-const SEVERITY_LOOK = {
-  critical: { icon: "priority-1", tone: "danger", level: "error" },
-  high: { icon: "priority-2", tone: "warning", level: "warning" },
-  medium: { icon: "priority-3", tone: "neutral", level: "info" },
-  low: { icon: "priority-4", tone: "quiet", level: "info" },
-  ignore: { icon: "ci-none", tone: "quiet", level: "info" },
-};
+// A nudge's toast level, by its severity.
+/** @type {Record<string, "error" | "warning" | "info">} */
+const SEVERITY_LEVEL = { critical: "error", high: "warning" };
+/** @type {Record<string, string>} */
 const OUTCOME_TIP = { reported: "Needs attention", ignored: "Not for you", held: "Waiting for impact", failed: "Triage failed" };
+// An On-call row's own actions, as its menu and details show them.
+/** @type {Record<import("../row-action.js").OncallMenuId, { label: string, icon: string }>} */
+export const ONCALL_MENU_ITEMS = {
+  report: { label: "View report", icon: "resume" },
+  continue: { label: "Continue in Claude", icon: "resume" },
+  rerun: { label: "Re-run triage", icon: "refresh" },
+  seen: { label: "Mark as seen", icon: "check" },
+  unseen: { label: "Mark as unseen", icon: "check" },
+};
 
 // Kept at module scope, so a new panel copy shows the last read at once.
 const state = {
@@ -119,58 +127,50 @@ const getOncallFilters = () => {
   };
 };
 
-/** @typedef {"report" | "claude" | "seen" | "unseen" | "rerun" | "tracker"} OncallActionId */
 // trackerName: the issue tracker the row came from, for "Open in Sentry" and the prompts.
 /** @typedef {{ claudePath: string | null, codeFolder: string | null, trackerName: string }} RunConfig */
 // What every row of one render reads.
 /** @typedef {{ rowSkills: import("../settings.js").Skills, rerunning: Record<string, string>, runConfig: RunConfig, currentShortId: string | null, now: number }} RowContext */
 // Rows drawn at first and added by each "Show more".
 const ROW_PAGE = 50;
-/** @typedef {{ decision: Decision, config: RunConfig, actions: { id: OncallActionId, label: string, icon: string }[], skills: string[] }} OncallMenu */
 const ASK = ASK_ACTION;
-
-/** @param {{ decision: Decision, isSeen: boolean, trackerName: string }} params @returns {{ id: OncallActionId, label: string, icon: string }[]} */
-export function getOncallActions({ decision, isSeen, trackerName }) {
-  /** @type {{ id: OncallActionId, label: string, icon: string }[]} */
-  const actions = [];
-  if (decision.reportPath) actions.push({ id: "report", label: "View report", icon: "resume" });
-  if (needsAttention(decision)) actions.push(isSeen ? { id: "unseen", label: "Mark as unseen", icon: "check" } : { id: "seen", label: "Mark as seen", icon: "check" });
-  actions.push({ id: "rerun", label: "Re-run triage", icon: "refresh" }, { id: "tracker", label: `Open in ${trackerName}`, icon: "oncall" });
-  return actions;
-}
 
 // What a skill or Ask gets: the issue, and the AI's report when there is one.
 /** @param {{ decision: Decision, trackerName: string }} params */
 const describeIssue = ({ decision: d, trackerName }) => `${trackerName} issue ${d.shortId} (${d.title}): ${d.url}${d.reportPath ? `. The on-call triage report is at ${d.reportPath}` : ""}`;
 
 // A skill (or Ask) on an issue, in a new Claude tab in the code folder (else where Herdr starts tabs).
-/** @param {{ skill: string, decision: Decision, config: RunConfig }} params */
-export function runSkillOnIssue({ skill, decision, config }) {
+// Its case's Where may send it to a background tab; Ask and Continue always open in front.
+/** @param {{ skill: string, decision: Decision, config: RunConfig, caseWhere: import("../settings.js").CaseWhere }} params */
+export function runSkillOnIssue({ skill, decision, config, caseWhere }) {
   if (skill === CONTINUE_ACTION) {
     if (continueInClaude({ decision, config })) markSeen([decision]);
     else notify({ title: `${decision.shortId} has no Claude session`, body: "Only issues the AI looked at have one.", level: "info" });
     return;
   }
+  const { isBackground } = getCaseRunPlace({
+    caseWhere, where: "here", role: skill === ASK ? "ask" : "other", hasWorktreeTarget: false, hasWorktree: false, isBackgroundDefault: false,
+  });
   const prompt = skill === ASK
     ? `Read ${describeIssue({ decision, trackerName: config.trackerName })}. Then wait for my questions. Change no code.`
     : `/${skill} ${describeIssue({ decision, trackerName: config.trackerName })}`;
   const name = `${decision.shortId} ${skill === ASK ? "ask" : skill.replace(/^gh44-/, "")}`;
   const space = spaces().find((sp) => sp.active)?.id;
-  run("tab.new", { name, argv: [config.claudePath ?? "claude", prompt], ...(space ? { space } : {}), ...(config.codeFolder ? { folder: config.codeFolder } : {}) });
+  run("tab.new", { name, argv: [config.claudePath ?? "claude", prompt], focus: !isBackground, ...(space ? { space } : {}), ...(config.codeFolder ? { folder: config.codeFolder } : {}) });
+  if (isBackground) notify({ title: `Started ${name}`, body: "Running in the background. Herdr tells you when it needs you or is done.", level: "info" });
   markSeen([decision]);
 }
 
-// One action on one row. The popup runs it itself; nothing is handed to the panel.
-/** @param {{ cx: import("gpui-kit").Context, action: OncallActionId, decision: Decision, config: RunConfig }} params */
-export async function runOncallAction({ cx, action, decision, config }) {
+// One of a row's own actions. A menu popup runs it itself; nothing is handed to the panel.
+/** @param {{ action: import("../row-action.js").OncallMenuId, decision: Decision, config: RunConfig }} params */
+export async function runOncallAction({ action, decision, config }) {
   switch (action) {
     case "report":
       if (openReport({ decision, trackerName: config.trackerName })) markSeen([decision]);
       else notify({ title: `${decision.shortId} has no report`, body: "Only issues the AI looked at have one. Re-run the triage to make one.", level: "info" });
       return;
-    case "claude":
-      if (continueInClaude({ decision, config })) markSeen([decision]);
-      else notify({ title: `${decision.shortId} has no Claude session`, level: "info" });
+    case "continue":
+      runSkillOnIssue({ skill: CONTINUE_ACTION, decision, config, caseWhere: "default" });
       return;
     case "seen":
       markSeen([decision]);
@@ -184,49 +184,12 @@ export async function runOncallAction({ cx, action, decision, config }) {
       else notify({ title: "Could not ask for a re-run", body: r.message, level: "warning" });
       return;
     }
-    case "tracker":
-      cx.open_url(decision.url);
-      return;
     default: {
       /** @type {never} */
       const unknownAction = action;
       return unknownAction;
     }
   }
-}
-
-// The popup's rows: the row's actions, then every installed skill (searchable) and Ask.
-/** @param {{ hub: any, menu: { oncall: OncallMenu } }} params */
-export function oncallMenuRows({ hub, menu }) {
-  const t = theme();
-  const { decision, config, actions, skills } = menu.oncall;
-  const close = () => closeOverlay(props().overlay);
-  // Triaging now (a re-run waits, or the AI is on it): Re-run spins and can't be clicked again.
-  const isTriaging = isRerunPending({ decision, requestedAt: getRerunning()[decision.issueId], now: Date.now() })
-    || state.service?.current?.shortId === decision.shortId;
-  const actionRows = actions.filter((a) => hub.matchesMenuSearch(a.label)).map((a) => hub.menuRow({
-    id: `oncall-${a.id}`, label: a.id === "rerun" && isTriaging ? "Triaging…" : a.label, actionIcon: a.icon,
-    isDisabled: a.id === "rerun" && isTriaging, isLoading: a.id === "rerun" && isTriaging,
-    /** @param {import("gpui-kit").Context} cx */
-    onClick: (cx) => {
-      // The re-run writes a file first: the popup stays until it is written, or closing would cancel it.
-      cx.spawn(async (/** @type {import("gpui-kit").Context} */ cx) => {
-        await runOncallAction({ cx, action: a.id, decision, config });
-        close();
-      });
-    },
-  }));
-  /** @param {string} skill */
-  const labelOf = (skill) => (skill === ASK ? "Ask Claude about it" : skill === CONTINUE_ACTION ? "Continue in Claude" : `/${skill}`);
-  const skillRows = skills.filter((s) => hub.matchesMenuSearch(labelOf(s))).map((skill) => hub.menuRow({
-    id: `oncall-skill-${skill}`, label: labelOf(skill), actionIcon: "play",
-    onClick: () => {
-      runSkillOnIssue({ skill, decision, config });
-      close();
-    },
-  }));
-  const title = div().flex_none().px(9).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).child("Run");
-  return [...(skillRows.length ? [title, ...skillRows, hub.menuSeparator("oncall-skills")] : []), ...actionRows];
 }
 
 export class OncallView {
@@ -287,7 +250,7 @@ export class OncallView {
       notify({
         title: `${(d.severity ?? "").toUpperCase()} · ${d.shortId}`,
         body: d.summary,
-        level: SEVERITY_LOOK[d.severity ?? "low"]?.level ?? "info",
+        level: SEVERITY_LEVEL[d.severity ?? ""] ?? "info",
         action: { name: "hub.oncall" },
       });
     }
@@ -360,11 +323,11 @@ export class OncallView {
         .when(hiddenCount > 0, (list) => list.child(this.showMoreRow(hiddenCount)))));
   }
 
-  // ● Listening to 5 projects · next check in 29s · [Check now] [Go on call]
+  // ● Listening to 5 projects · next check in 29s · [Check now] (or [Go on call]), and under it a
+  // thin bar that fills up until the next check.
   /** @param {{ config: import("./config.js").OncallConfig }} params */
   statusBar({ config }) {
     const t = theme();
-    const colors = palette(t);
     const service = state.service;
     const isRunning = Boolean(service?.isRunning);
     const projects = `${config.projects.length} project${config.projects.length === 1 ? "" : "s"}`;
@@ -372,24 +335,26 @@ export class OncallView {
     // The issue the AI triages right now, in place of the countdown.
     const current = isRunning && !service?.lastError ? service?.current ?? null : null;
     const listening = `Listening to ${projects}${nextIn !== null && nextIn > 0 ? ` · next check in ${formatSpan(nextIn)}` : ""}`;
-    const text = isRunning
-      ? service?.lastError ? `Last check failed: ${service.lastError.message}` : current ? `Triaging ${current.shortId}: ${current.title} · ${projects}` : listening
-      : config.isOn ? "On call, the service is starting…" : `Off call · ${projects} set up`;
-    const dot = isRunning ? (service?.lastError ? colors.warning : colors.success) : t.dim;
-    // Running and fine: a thin bar under the line fills up until the next check.
+    /** @returns {{ tone: import("../controls.js").StatusTone, text: string }} */
+    const getLine = () => {
+      if (!isRunning) return { tone: "off", text: config.isOn ? "On call, the service is starting…" : `Off call · ${projects} set up` };
+      if (service?.lastError) return { tone: "warning", text: `Last check failed: ${service.lastError.message}` };
+      if (current) return { tone: "checking", text: `Triaging ${current.shortId}: ${current.title} · ${projects}` };
+      return { tone: "connected", text: listening };
+    };
+    const getAction = () => {
+      if (isRunning) {
+        return button({ id: "oncall-check-now", label: isChecking() ? "Checking…" : "Check now", variant: isChecking() ? "busy" : "normal", onClick: (cx) => this.handleCheckNow(cx) });
+      }
+      if (config.isOn) return null;
+      return button({ id: "oncall-go-on", label: state.isStarting ? "Starting…" : "Go on call", variant: state.isStarting ? "busy" : "primary", onClick: (cx) => this.handleGoOnCall(cx) });
+    };
     const isCountingDown = !current && isRunning && !service?.lastError && nextIn !== null && nextIn > 0;
     const filled = Math.round((1 - getCountdownLeft({ msLeft: nextIn ?? 0, periodMs: config.pollMinutes * MINUTE_MS })) * 100);
-    const line = h_flex().h(26).gap(8).items_center()
-      .when(Boolean(current), (el) => el.tooltip(current ? `The AI is triaging ${current.shortId}: ${current.title}` : "")
-        .child(svg(SPINNER).size(12).flex_none().text_color(t.working).spin(900)))
-      .when(!current, (el) => el.child(div().size(8).flex_none().rounded(4).bg(dot)))
-      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(service?.lastError ? colors.warning : t.muted).child(text))
-      .when(isRunning, (el) => el.child(this.smallButton({ id: "oncall-check-now", label: isChecking() ? "Checking…" : "Check now", isLoading: isChecking(), onClick: (cx) => this.handleCheckNow(cx) })))
-      .when(!isRunning && !config.isOn, (el) => el.child(this.smallButton({ id: "oncall-go-on", label: state.isStarting ? "Starting…" : "Go on call", isAccent: true, onClick: (cx) => this.handleGoOnCall(cx) })));
     return v_flex().id("oncall-status").gap(2)
-      .child(line)
+      .child(statusLine({ id: "oncall-status", ...getLine(), action: getAction(), tip: current ? `The AI is triaging ${current.shortId}: ${current.title}` : null }))
       .when(isCountingDown, (el) => el.child(div().w_full().h(COUNTDOWN_BAR_HEIGHT).rounded(1).bg(t.border).overflow_hidden()
-        .child(div().h_full().w(`${filled}%`).bg(colors.success))));
+        .child(div().h_full().w(`${filled}%`).bg(palette(t).success))));
   }
 
   /** @param {import("gpui-kit").Context} cx */
@@ -422,16 +387,6 @@ export class OncallView {
     });
   }
 
-  /** @param {{ id: string, label: string, onClick: (cx: import("gpui-kit").Context) => void, isAccent?: boolean, isLoading?: boolean }} params */
-  smallButton({ id, label, onClick, isAccent = false, isLoading = false }) {
-    const t = theme();
-    return div().id(id).h(24).px(10).gap(6).flex_none().flex().items_center().rounded(6).border(1).border_color(isAccent ? t.accent : t.border)
-      .text_size(12).text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
-      .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); })
-      .when(isLoading, (el) => el.child(svg(SPINNER).size(11).flex_none().text_color(t.working).spin(900)))
-      .child(label);
-  }
-
   // Today: triaged, AI checked, unseen, AI cost.
   /** @param {string[]} seen */
   statTiles(seen) {
@@ -443,12 +398,13 @@ export class OncallView {
       { id: "unseen", value: String(stats.unseen), label: "Unseen", tip: "Nudges you have not opened", tone: stats.unseen > 0 ? palette(t).danger : null },
       { id: "cost", value: formatCost(stats.costUsd), label: "AI cost", tip: "What today's triage cost" },
     ];
-    return v_flex().gap(5)
-      .child(div().text_size(10.5).font_semibold().text_color(t.dim).child("TODAY"))
-      .child(h_flex().gap(6).children(tiles.map((tile) => v_flex().id(`oncall-stat-${tile.id}`).flex_1().min_w(0).px(9).py(7).gap(1).rounded(7)
-        .bg(t.surface).border(1).border_color(t.border).tooltip(tile.tip)
-        .child(div().text_size(16).font_semibold().text_color(tile.tone ?? t.foreground).truncate().child(tile.value))
-        .child(div().text_size(11).text_color(t.muted).truncate().child(tile.label)))));
+    return bay({
+      title: "Today",
+      children: [h_flex().gap(6).children(tiles.map((tile) => v_flex().id(`oncall-stat-${tile.id}`).flex_1().min_w(0).px(10).py(6).gap(1).rounded(4)
+        .bg(t.popover).border(1).border_color(t.border).tooltip(tile.tip)
+        .child(div().font_family(MONO_FONT).text_size(16).font_semibold().text_color(tile.tone ?? t.foreground).truncate().child(tile.value))
+        .child(div().text_size(11).text_color(t.muted).truncate().child(tile.label))))],
+    });
   }
 
   // The scope select in the search box: Needs you, All, Filtered, each with its count (unseen
@@ -501,7 +457,6 @@ export class OncallView {
       .child(div().px(24).text_size(12).text_color(t.dim).text_center().child(isRunning ? "Nothing that matches your rules needs you right now." : "Go on call to keep watching in the background."));
   }
 
-  // One row: severity, title, then id, project, kind, impact and age; [▸ report ▾] at the end.
   // "Show 26 more": the list draws ROW_PAGE rows at a time.
   /** @param {number} hiddenCount */
   showMoreRow(hiddenCount) {
@@ -512,63 +467,90 @@ export class OncallView {
       .child(`Show ${Math.min(ROW_PAGE, hiddenCount)} more of ${hiddenCount}`);
   }
 
+  // One strip: the holder in its case's tone, the title over its short id and facts, and the split
+  // button with the case's main action (row-action.js getOncallRowAction) and its menu.
   /** @param {{ decision: Decision, isSeen: boolean, context: RowContext }} params */
-  entry({ decision, isSeen, context }) {
-    const t = theme();
-    const colors = palette(t);
-    const d = decision;
-    const look = d.outcome === "reported" ? SEVERITY_LOOK[d.severity ?? "low"] : d.outcome === "failed" ? { icon: "ci-failing", tone: "danger" } : { icon: "ci-none", tone: "quiet" };
-    const isUnseen = needsAttention(d) && !isSeen;
-    const actions = getOncallActions({ decision: d, isSeen, trackerName: context.runConfig.trackerName });
-    const { runConfig, rowSkills } = context;
-    const age = formatSpan(context.now - Date.parse(d.decidedAt));
+  entry({ decision: d, isSeen, context }) {
+    const { runConfig, rowSkills, now } = context;
+    const id = `oncall-${d.issueId}`;
     const situation = getOncallSituation(d);
     const skills = getCaseActions({ skills: rowSkills, tab: "oncall", situation }).filter((skill) => skill !== CONTINUE_ACTION || Boolean(d.sessionId));
     const defaultSkill = getDefaultSkill({ skills: rowSkills, tab: "oncall", situation });
-    /** @param {string} skill */
-    const start = (skill) => runSkillOnIssue({ skill, decision: d, config: runConfig });
-    // No default skill: the button opens the report, else the issue in its tracker.
-    const openAction = d.reportPath ? "report" : "tracker";
-    const primary = defaultSkill && skills.includes(defaultSkill)
-      ? {
-        label: shortSkill(defaultSkill), icon: "play",
-        tip: defaultSkill === CONTINUE_ACTION ? "Continue the triage in Claude" : defaultSkill === ASK ? "Ask Claude about it" : `/${defaultSkill} on this issue`,
-        /** @param {import("gpui-kit").Context} _cx */
-        run: (_cx) => start(defaultSkill),
-      }
-      : {
-        label: openAction === "report" ? "report" : "open", icon: openAction === "report" ? "resume" : "oncall",
-        tip: openAction === "report" ? "Open the AI's report beside your terminal" : `Open in ${runConfig.trackerName}`,
-        /** @param {import("gpui-kit").Context} cx */
-        run: (cx) => { cx.spawn(async (cx) => { await runOncallAction({ cx, action: openAction, decision: d, config: runConfig }); cx.notify(); }); },
-      };
-    const id = d.shortId;
-    // A re-run waiting for its new decision, or the AI on this issue right now: the button spins.
-    const isRerunning = isRerunPending({ decision: d, requestedAt: context.rerunning[d.issueId], now: context.now }) || context.currentShortId === d.shortId;
-    const button = isRerunning
-      ? { label: "triaging", icon: "refresh", isLoading: true, tip: "Re-running the triage", run: () => {} }
-      : primary;
-    const decidedBy = getDecidedBy(d);
-    const element = this.hub.row({
-      id: `oncall-${d.issueId}`,
-      title: d.title,
-      isTitleDim: d.outcome !== "reported",
-      rail: look.tone,
-      status: { icon: look.icon, color: colors[look.tone], tip: d.severity ? `${d.severity} · ${OUTCOME_TIP[d.outcome]}` : OUTCOME_TIP[d.outcome] },
-      chips: [
-        ...(isUnseen ? [{ id: `${id}-new`, label: "new", tone: "danger" }] : []),
-        { id: `${id}-ref`, label: d.shortId, iconName: "oncall", tone: "quiet", isMono: true, url: d.url, tip: `Open in ${runConfig.trackerName}` },
-        { id: `${id}-decided`, label: decidedBy, tone: "neutral", tip: `Decided by ${decidedBy}: ${d.summary}` },
-        ...(d.project ? [{ id: `${id}-project`, label: d.project, tone: "neutral" }] : []),
-        ...(d.kind === "regressed" || d.kind === "escalating" ? [{ id: `${id}-kind`, label: d.kind, tone: "warning" }] : []),
-        { id: `${id}-impact`, label: `${d.count} ev · ${d.userCount} users`, tone: "quiet", tip: "Events and users" },
-        { id: `${id}-summary`, label: d.summary, tone: "quiet", tip: d.matchedRule ? `Matches: ${d.matchedRule}` : d.summary },
-        { id: `${id}-age`, label: age, tone: "quiet", tip: `Decided ${new Date(d.decidedAt).toLocaleString()}` },
-      ],
-      primary: button,
-      menu: { oncall: { decision: d, config: runConfig, actions, skills } },
+    const caseRun = getCaseRun({ skills: rowSkills, tab: "oncall", situation });
+    const { agent, rowAgent } = this.hub.findOncallAgent(d.shortId);
+    // A re-run waiting for its new decision, or the AI on this issue right now.
+    const isTriaging = isRerunPending({ decision: d, requestedAt: context.rerunning[d.issueId], now }) || context.currentShortId === d.shortId;
+    /** @param {{ skill: string }} params */
+    const start = ({ skill }) => runSkillOnIssue({ skill, decision: d, config: runConfig, caseWhere: caseRun.where });
+    const action = getOncallRowAction({
+      situation, isTriaging, agent: rowAgent, skill: defaultSkill && skills.includes(defaultSkill) ? defaultSkill : null,
+      hasReport: Boolean(d.reportPath), trackerName: runConfig.trackerName, afterDone: caseRun.afterDone, now,
     });
-    return { id: `oncall-${d.issueId}`, url: d.url, element, primary: button.run, actions: skills, start };
+    /** @returns {(cx: import("gpui-kit").Context) => void} */
+    const toRun = () => {
+      switch (action.kind) {
+        case "triaging": return () => {};
+        case "agent": return () => { if (agent) focusAgent(agent); };
+        case "skill": return () => { if (action.skill) start({ skill: action.skill }); };
+        case "report": return () => { void runOncallAction({ action: "report", decision: d, config: runConfig }); };
+        case "link": return (cx) => cx.open_url(d.url);
+        default: {
+          /** @type {never} */
+          const unknownKind = action.kind;
+          return unknownKind;
+        }
+      }
+    };
+    const primary = { ...action, run: toRun() };
+    const trackerLink = { label: `Open in ${runConfig.trackerName}`, icon: "oncall", url: d.url };
+    const sections = getOncallRowMenu({
+      suggested: skills, list: rowSkills.oncall.list, hasReport: Boolean(d.reportPath), hasSession: Boolean(d.sessionId),
+      isSeen: needsAttention(d) ? isSeen : null, trackerLink, hasAgent: Boolean(agent),
+    });
+    const menu = {
+      tab: "oncall", situation, rowId: id, skills, sections, agent: agent ? { space: agent.space, tab: agent.tab } : null,
+      oncall: { decision: d, config: runConfig, caseWhere: caseRun.where, isTriaging },
+    };
+    const holder = { ...getCaseLook(situation), tip: d.severity ? `${d.severity} · ${OUTCOME_TIP[d.outcome]}` : OUTCOME_TIP[d.outcome] };
+    /** @param {import("../row-action.js").OncallMenuId} actionId */
+    const runAction = (actionId) => runOncallAction({ action: actionId, decision: d, config: runConfig });
+    const openDetails = () => {
+      const details = getRowDetails({ row: { kind: "decision", decision: d }, skills: rowSkills, menu: sections, agent: rowAgent, worktree: null, repoMain: null, main: action.skill, now });
+      const rowActions = sections.flatMap((section) => section.items).flatMap((item) => (item.kind === "oncall" ? [{ id: item.id, ...ONCALL_MENU_ITEMS[item.id] }] : []));
+      openRowDetails({
+        ...details, tab: "oncall", rowId: id, situation, holder, title: d.title, links: [trackerLink], agentTab: menu.agent, rowActions,
+        refs: [d.shortId, ...(d.project ? [d.project] : [])], caseLabel: getCaseLabel({ tab: "oncall", situation }),
+      });
+    };
+    const element = this.hub.strip({
+      id, holder, title: d.title, isTitleDim: d.outcome !== "reported", primary, menu, openDetails,
+      meta: this.hub.metaLine({
+        id: d.shortId,
+        refs: [{ text: d.shortId, url: d.url, tip: `Open in ${runConfig.trackerName}` }],
+        facts: getDecisionFacts({ decision: d, isUnseen: needsAttention(d) && !isSeen, now }),
+      }),
+    });
+    return { id, url: d.url, element, primary: primary.run, actions: skills, start, openDetails, runAction };
+  }
+
+  // The rows the list shows now, with their case and a preview for the case editor; null before the first read.
+  /** @returns {{ ref: string, situation: import("../settings.js").Situation, toPreview: () => import("../case-editor.js").CasePreview }[] | null} */
+  shownItems() {
+    const config = state.config;
+    if (!config) return null;
+    const seen = getSeen();
+    const trackerName = getProvider(config.provider).name;
+    return filterDecisions({ decisions: state.decisions, filters: getOncallFilters(), search: this.search.value(), seen }).map((d) => {
+      const situation = getOncallSituation(d);
+      return {
+        ref: d.shortId, situation,
+        toPreview: () => ({
+          title: d.title, meta: [d.shortId, ...getDecisionFacts({ decision: d, isUnseen: false })].join(" · "),
+          holder: getCaseLook(situation), targetLabel: d.shortId, isMergeReady: false, hasWorktreeTarget: false, hasWorktree: false,
+          oncall: { hasReport: Boolean(d.reportPath), trackerName },
+        }),
+      };
+    });
   }
 
   // The "hero" for set up: an icon, a title, a line and one button.
@@ -581,7 +563,7 @@ export class OncallView {
         .child(svg(icon(iconName)).size(26).text_color(color)))
       .child(div().text_size(18).font_bold().text_color(t.foreground).child(title))
       .child(div().text_size(12).text_color(t.dim).text_center().child(body))
-      .child(this.smallButton({ id: "oncall-hero-action", label: action.label, isAccent: true, onClick: action.onClick }));
+      .child(button({ id: "oncall-hero-action", label: action.label, variant: "primary", onClick: action.onClick }));
   }
 }
 
