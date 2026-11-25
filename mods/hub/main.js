@@ -208,17 +208,12 @@ const tabOfStore = (store) => {
 };
 /** @param {string} store */
 const getSavedSets = (store) => getFilterSets({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store) });
-// The scope picker's extra groups: the saved sets, then "Save current filters…".
+// The scope picker's extra group: the saved sets. Saving is in the Filters popover.
 const SAVED_FIELD = "__saved";
-const SAVE_FIELD = "__save";
-const SAVE_ACTION = "save";
 /** @param {string} store */
 const savedSetGroups = (store) => {
   const sets = getSavedSets(store);
-  return [
-    ...(sets.length ? [{ title: "Saved", field: SAVED_FIELD, isMulti: false, options: sets.map((set) => ({ value: set.id, label: set.name })) }] : []),
-    { title: "", field: SAVE_FIELD, isMulti: false, options: [{ value: SAVE_ACTION, label: "Save current filters…" }] },
-  ];
+  return sets.length ? [{ title: "Saved", field: SAVED_FIELD, isMulti: false, options: sets.map((set) => ({ value: set.id, label: set.name })) }] : [];
 };
 // Puts a saved set's scope and filters in place; the search text stays.
 /** @param {{ store: string, id: string }} params */
@@ -823,7 +818,7 @@ export default class Hub extends View {
       .child(h_flex().id(`scope-${scopeDef.field}`).h_full().px(8).gap(4).items_center().flex_none().cursor_pointer()
         .text_size(12).text_color(t.foreground).bg(t.raised).hover((s) => s.bg(t.hover))
         .on_mouse_down("left", pressMenuButton)
-        .on_click(() => openMenu({ store, groups: [scopeDef, ...savedSetGroups(store)], align: "left", saveContext: { scopeLabel, defs } }))
+        .on_click(() => openMenu({ store, groups: [scopeDef, ...savedSetGroups(store)], align: "left" }))
         .child(activeSet ? `★ ${activeSet.name}` : scopeLabel).child(svg(icon("chevron")).size(12).text_color(t.muted)))
       .child(div().w(1).h_full().bg(t.border))
       .child(h_flex().flex_1().min_w(0).px(8).gap(6).items_center()
@@ -831,13 +826,13 @@ export default class Hub extends View {
         .child(Input.new(state).flex_1().text_size(12).text_color(t.foreground))
         .child(this.clearButton({ id: `clear-${scopeDef.field}`, state, onClear: (cx) => { this.searchChangedAt = 0; this.tick(cx); } })))
       .child(div().w(1).h_full().bg(t.border))
-      .child(this.filtersButton({ store, defs }));
+      .child(this.filtersButton({ store, defs, scopeLabel }));
     const chips = getFilterChips({ defs, filters, defaults: defaultsFor(store) });
     if (!getPanelSettings().shouldShowFilterChips || chips.length === 0) return search;
     return v_flex().gap(6).child(search).child(this.filterChipRow({ store, chips, defs, scopeLabel }));
   }
 
-  // [Team is FE ✕][CI is failing ✕] +   Clear  Save: scrolls sideways when it overflows. A chip
+  // [Team is FE ✕][CI is failing ✕] +   Clear: scrolls sideways when it overflows. A chip
   // opens its filter's options; ✕ resets it; + opens every filter.
   /** @param {{ store: string, chips: import("./saved-filters.js").FilterChip[], defs: any[], scopeLabel: string }} params */
   filterChipRow({ store, chips, defs, scopeLabel }) {
@@ -862,9 +857,8 @@ export default class Hub extends View {
     return h_flex().gap(6).items_center()
       .child(h_flex().id(`chips-row-${tabOfStore(store)}`).flex_1().min_w(0).gap(5).items_center().overflow_x_scrollbar()
         .children(chips.map(chip))
-        .child(textButton(`chips-add-${tabOfStore(store)}`, "+", () => openMenu({ store, groups: defs, isFilterList: true, align: "left" }))))
-      .child(textButton(`chips-clear-${tabOfStore(store)}`, "Clear", () => patchFilters({ store, patch: Object.fromEntries(defs.map((d) => [d.field, defaultsFor(store)[d.field]])) })))
-      .child(textButton(`chips-save-${tabOfStore(store)}`, "Save", () => openSaveFilters({ store, scopeLabel, defs })));
+        .child(textButton(`chips-add-${tabOfStore(store)}`, "+", () => openMenu({ store, groups: defs, isFilterList: true, align: "left", saveContext: { scopeLabel, defs } }))))
+      .child(textButton(`chips-clear-${tabOfStore(store)}`, "Clear", () => patchFilters({ store, patch: Object.fromEntries(defs.map((d) => [d.field, defaultsFor(store)[d.field]])) })));
   }
 
   // An X at the end of a search box with text: empties it and keeps the keyboard in it.
@@ -882,15 +876,15 @@ export default class Hub extends View {
       .child(svg(icon("x")).size(12));
   }
 
-  // [≡ Filters ②]: every filter in one popover, with search and Clear.
-  filtersButton({ store, defs }) {
+  // [≡ Filters ②]: every filter in one popover, with search, Clear and Save.
+  filtersButton({ store, defs, scopeLabel }) {
     const t = theme();
     const count = defs.reduce((sum, def) => sum + countPicked({ store, def }), 0);
     const isOn = count > 0;
     return h_flex().id(`filters-${store}`).h_full().px(8).gap(5).items_center().flex_none().cursor_pointer().text_size(12)
       .text_color(isOn ? t.foreground : t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", pressMenuButton)
-      .on_click(() => openMenu({ store, groups: defs, isFilterList: true, align: "right" }))
+      .on_click(() => openMenu({ store, groups: defs, isFilterList: true, align: "right", saveContext: { scopeLabel, defs } }))
       .child(svg(icon("filter")).size(13))
       .child("Filters")
       .when(isOn, (el) => el.child(div().px(5).rounded(8).bg(t.accent).text_color(t.accent_foreground).text_size(10.5).child(String(count))));
@@ -1597,7 +1591,7 @@ export default class Hub extends View {
   }
 
   optionRows({ store, def, scrollHandle }) {
-    if (def.field === SAVED_FIELD || def.field === SAVE_FIELD) return this.savedSetRows({ store, def });
+    if (def.field === SAVED_FIELD) return this.savedSetRows({ store, def });
     const value = getFilters(store)[def.field];
     const isPinned = (o) => def.isMulti && this.pinned.has(`${def.field}:${o.value}`);
     const options = def.options.filter((o) => this.matchesMenuSearch(o.label))
@@ -1619,18 +1613,8 @@ export default class Hub extends View {
     });
   }
 
-  // The scope picker's saved sets (✓ on the one in use, ✕ to delete) and its save action.
+  // The scope picker's saved sets: ✓ on the one in use, ✕ to delete.
   savedSetRows({ store, def }) {
-    const menu = props().menu;
-    if (def.field === SAVE_FIELD) {
-      return [this.menuRow({
-        id: "saved-save", label: def.options[0].label, actionIcon: "filter",
-        onClick: () => {
-          closeOverlay(props().overlay);
-          openSaveFilters({ store, scopeLabel: menu.saveContext?.scopeLabel ?? "", defs: menu.saveContext?.defs ?? [] });
-        },
-      })];
-    }
     const active = findActiveSet({ sets: getSavedSets(store), filters: getFilters(store), defaults: defaultsFor(store) });
     return def.options.filter((o) => this.matchesMenuSearch(o.label)).map((o) => this.menuRow({
       id: `saved-${o.value}`, label: `★ ${o.label}`, isChecked: active?.id === o.value,
@@ -1739,11 +1723,19 @@ export default class Hub extends View {
         .child(this.menuSearchBox())
         .child(v_flex().id(`fl-list-${def.field}`).h(Math.min(options.length, FILTER_OPTIONS_VISIBLE) * MENU_ROW_HEIGHT).overflow_y_scrollbar().track_scroll(this.optionScroll).children(options))];
     });
+    const footerButton = ({ id, label }) => h_flex().id(id).h(MENU_ROW_HEIGHT - 4).px(9).items_center().rounded(6)
+      .text_color(total > 0 ? t.foreground : t.dim).when(total > 0, (el) => el.cursor_pointer().hover((s) => s.bg(t.selected)))
+      .child(label);
+    const handleSave = () => {
+      closeOverlay(props().overlay);
+      openSaveFilters({ store, scopeLabel: menu.saveContext?.scopeLabel ?? "", defs: menu.saveContext?.defs ?? groups });
+    };
+    // [Clear 2 filters        Save]: Save keeps the filters as a set in the scope picker.
     return [...rows, div().h(1).flex_none().my(3).bg(t.border),
-      h_flex().id("fl-clear").h(MENU_ROW_HEIGHT - 4).flex_none().px(9).items_center().rounded(6).text_size(12)
-        .text_color(total > 0 ? t.foreground : t.dim).when(total > 0, (el) => el.cursor_pointer().hover((s) => s.bg(t.selected)))
-        .on_click(() => { if (total > 0) patchFilters({ store, patch: Object.fromEntries(groups.map((def) => [def.field, defaultsFor(store)[def.field]])) }); })
-        .child(total > 0 ? `Clear ${total} filter${total === 1 ? "" : "s"}` : "No filters on")];
+      h_flex().flex_none().gap(4).items_center().text_size(12)
+        .child(footerButton({ id: "fl-clear", label: total > 0 ? `Clear ${total} filter${total === 1 ? "" : "s"}` : "No filters on" }).flex_1()
+          .on_click(() => { if (total > 0) patchFilters({ store, patch: Object.fromEntries(groups.map((def) => [def.field, defaultsFor(store)[def.field]])) }); }))
+        .when(total > 0, (el) => el.child(footerButton({ id: "fl-save", label: "Save" }).flex_none().on_click(handleSave)))];
   }
 
   // A ticket's skill without a worktree first asks where to run. The popup view can outlive one
