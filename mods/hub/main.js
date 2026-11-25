@@ -23,6 +23,8 @@ import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall/text-dialog.js";
 import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall/client.js";
 import { OncallView, ReportView, oncallMenuRows } from "./oncall/view.js";
 import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall/decisions.js";
+import { SAVED_FILTERS_STORE, getFilterSets, removeFilterSet, findActiveSet, getFilterChips, suggestSetName } from "./saved-filters.js";
+import { FilterSavePopup, SAVE_POPUP_SIZE } from "./filter-save-popup.js";
 import {
   getSettings, getDefaultSkill, getGithubSituation, getLinearSituation, getSkillRole, getCaseActions, getTicketSkills,
   getKeySkills, getKeyHints, getIssueStage, shortSkill, hasNoDefaults, getWhereToRun, getShownTab, getRunnableSkills, getTabOrder, moveTab, ASK_ACTION, ASK_DESCRIPTION,
@@ -198,6 +200,38 @@ const getFilters = (store) => {
   return f;
 };
 const patchFilters = ({ store, patch }) => setShared(store, { ...getFilters(store), ...patch });
+// Saved filter sets are kept per tab; GitHub's apply to whichever repo is shown.
+/** @param {string} store @returns {import("./settings.js").Tab} */
+const tabOfStore = (store) => {
+  if (store === ONCALL_FILTERS_STORE) return "oncall";
+  return isGithubStore(store) ? "github" : "linear";
+};
+/** @param {string} store */
+const getSavedSets = (store) => getFilterSets({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store) });
+// The scope picker's extra groups: the saved sets, then "Save current filters…".
+const SAVED_FIELD = "__saved";
+const SAVE_FIELD = "__save";
+const SAVE_ACTION = "save";
+/** @param {string} store */
+const savedSetGroups = (store) => {
+  const sets = getSavedSets(store);
+  return [
+    ...(sets.length ? [{ title: "Saved", field: SAVED_FIELD, isMulti: false, options: sets.map((set) => ({ value: set.id, label: set.name })) }] : []),
+    { title: "", field: SAVE_FIELD, isMulti: false, options: [{ value: SAVE_ACTION, label: "Save current filters…" }] },
+  ];
+};
+// Puts a saved set's scope and filters in place; the search text stays.
+/** @param {{ store: string, id: string }} params */
+const applySavedSet = ({ store, id }) => {
+  const set = getSavedSets(store).find((s) => s.id === id);
+  if (set) setShared(store, { ...defaultsFor(store), ...set.filters });
+};
+/** @param {{ store: string, scopeLabel: string, defs: any[] }} params */
+const openSaveFilters = ({ store, scopeLabel, defs }) => {
+  const filters = getFilters(store);
+  const name = suggestSetName({ scopeLabel, chips: getFilterChips({ defs, filters, defaults: defaultsFor(store) }) });
+  openOverlay({ mod: "hub", kind: "popup", ...SAVE_POPUP_SIZE, at: "pointer", props: { saveFilters: { tab: tabOfStore(store), filters, name } } });
+};
 // Group ids ("pr-fix", "ln-In Progress") whose rows are hidden; kept across reloads.
 // "thu-4696-fe-2-remove-ff_jobs" -> { key: "THU-4696", title: "fe 2 remove ff_jobs" }; else the folder name.
 const worktreeName = (w) => {
@@ -381,6 +415,10 @@ export default class Hub extends View {
     }
     if (props()?.dialog === ONCALL_TEXT_DIALOG) {
       this.oncallTextDialog = new OncallTextDialog({ cx, field: props().field });
+      return;
+    }
+    if (props()?.saveFilters) {
+      this.filterSavePopup = new FilterSavePopup({ request: props().saveFilters });
       return;
     }
     if (props()?.report) {
@@ -773,17 +811,20 @@ export default class Hub extends View {
     return isOnSelected ? t.border : t.raised;
   }
 
-  // [Review: me + teams ▾ | search...] like GitHub's search box with its scope picker.
+  // [Review: me + teams ▾ | search...] like GitHub's search box with its scope picker, and under
+  // it (a General setting) the filters in use as chips. The picker also lists the saved sets.
   searchRow({ store, scopeDef, state, defs }) {
     const t = theme();
-    const value = getFilters(store)[scopeDef.field];
-    const label = scopeDef.options.find((o) => o.value === value)?.label ?? "";
-    return h_flex().h(30).items_center().rounded(6).border(1).border_color(this.isSearchFocused ? t.accent : t.input).bg(t.background).overflow_hidden()
+    const filters = getFilters(store);
+    const value = filters[scopeDef.field];
+    const scopeLabel = scopeDef.options.find((o) => o.value === value)?.label ?? "";
+    const activeSet = findActiveSet({ sets: getSavedSets(store), filters, defaults: defaultsFor(store) });
+    const search = h_flex().h(30).items_center().rounded(6).border(1).border_color(this.isSearchFocused ? t.accent : t.input).bg(t.background).overflow_hidden()
       .child(h_flex().id(`scope-${scopeDef.field}`).h_full().px(8).gap(4).items_center().flex_none().cursor_pointer()
         .text_size(12).text_color(t.foreground).bg(t.raised).hover((s) => s.bg(t.hover))
         .on_mouse_down("left", pressMenuButton)
-        .on_click(() => openMenu({ store, groups: [scopeDef], align: "left" }))
-        .child(label).child(svg(icon("chevron")).size(12).text_color(t.muted)))
+        .on_click(() => openMenu({ store, groups: [scopeDef, ...savedSetGroups(store)], align: "left", saveContext: { scopeLabel, defs } }))
+        .child(activeSet ? `★ ${activeSet.name}` : scopeLabel).child(svg(icon("chevron")).size(12).text_color(t.muted)))
       .child(div().w(1).h_full().bg(t.border))
       .child(h_flex().flex_1().min_w(0).px(8).gap(6).items_center()
         .child(svg(icon("search")).size(13).text_color(t.dim))
@@ -791,6 +832,39 @@ export default class Hub extends View {
         .child(this.clearButton({ id: `clear-${scopeDef.field}`, state, onClear: (cx) => { this.searchChangedAt = 0; this.tick(cx); } })))
       .child(div().w(1).h_full().bg(t.border))
       .child(this.filtersButton({ store, defs }));
+    const chips = getFilterChips({ defs, filters, defaults: defaultsFor(store) });
+    if (!getPanelSettings().shouldShowFilterChips || chips.length === 0) return search;
+    return v_flex().gap(6).child(search).child(this.filterChipRow({ store, chips, defs, scopeLabel }));
+  }
+
+  // [Team is FE ✕][CI is failing ✕] +   Clear  Save: scrolls sideways when it overflows. A chip
+  // opens its filter's options; ✕ resets it; + opens every filter.
+  /** @param {{ store: string, chips: import("./saved-filters.js").FilterChip[], defs: any[], scopeLabel: string }} params */
+  filterChipRow({ store, chips, defs, scopeLabel }) {
+    const t = theme();
+    const textButton = (/** @type {string} */ id, /** @type {string} */ label, /** @type {() => void} */ onClick) => div().id(id).h(22).px(6).flex().flex_none().items_center().rounded(5)
+      .text_size(11.5).text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", pressMenuButton).on_click(onClick).child(label);
+    const chip = (/** @type {import("./saved-filters.js").FilterChip} */ c) => {
+      const def = defs.find((d) => d.field === c.field);
+      return h_flex().id(`chip-${c.field}`).h(22).flex_none().items_center().rounded(5).border(1).border_color(t.border).bg(t.raised).text_size(11.5).overflow_hidden()
+        .child(h_flex().id(`chip-${c.field}-open`).h_full().pl(7).pr(5).gap(4).items_center().cursor_pointer().hover((s) => s.bg(t.hover))
+          .on_mouse_down("left", pressMenuButton)
+          .on_click(() => { if (def) openMenu({ store, groups: [def], align: "left" }); })
+          .child(div().text_color(t.muted).child(c.title))
+          .child(div().text_color(t.dim).child("is"))
+          .child(div().text_color(t.foreground).child(c.text)))
+        .child(div().id(`chip-${c.field}-remove`).h_full().px(4).flex().items_center().cursor_pointer().border_l(1).border_color(t.border)
+          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(`Clear ${c.title}`)
+          .on_click(() => patchFilters({ store, patch: { [c.field]: defaultsFor(store)[c.field] } }))
+          .child(svg(icon("x")).size(10)));
+    };
+    return h_flex().gap(6).items_center()
+      .child(h_flex().id(`chips-row-${tabOfStore(store)}`).flex_1().min_w(0).gap(5).items_center().overflow_x_scrollbar()
+        .children(chips.map(chip))
+        .child(textButton(`chips-add-${tabOfStore(store)}`, "+", () => openMenu({ store, groups: defs, isFilterList: true, align: "left" }))))
+      .child(textButton(`chips-clear-${tabOfStore(store)}`, "Clear", () => patchFilters({ store, patch: Object.fromEntries(defs.map((d) => [d.field, defaultsFor(store)[d.field]])) })))
+      .child(textButton(`chips-save-${tabOfStore(store)}`, "Save", () => openSaveFilters({ store, scopeLabel, defs })));
   }
 
   // An X at the end of a search box with text: empties it and keeps the keyboard in it.
@@ -1475,11 +1549,13 @@ export default class Hub extends View {
 
   // An action row gets a leading `actionIcon`; a choice row (`isChecked` set) gets a leading checkbox.
   // isDisabled: dimmed, not clickable and skipped by ↑/↓. isLoading: a spinner in place of the icon.
+  // onRemove: a trailing ✕, like a saved filter set's delete.
   /**
    * @param {{ id: string, label: string, actionIcon?: string | null, iconColor?: string | null, isChecked?: boolean | null,
-   *   onClick: (cx: import("gpui-kit").Context) => void, scroll?: { handle: any, index: number } | null, isDisabled?: boolean, isLoading?: boolean }} params
+   *   onClick: (cx: import("gpui-kit").Context) => void, scroll?: { handle: any, index: number } | null, isDisabled?: boolean, isLoading?: boolean,
+   *   onRemove?: (() => void) | null }} params
    */
-  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null, isDisabled = false, isLoading = false }) {
+  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null, isDisabled = false, isLoading = false, onRemove = null }) {
     const t = theme();
     if (isDisabled) {
       return h_flex().id(id).h(MENU_ROW_HEIGHT).flex_none().px(9).gap(8).items_center().rounded(6).bg(t.popover).text_color(t.dim)
@@ -1493,7 +1569,11 @@ export default class Hub extends View {
       .bg(isActive ? t.selected : t.popover).text_color(t.foreground).hover((s) => s.bg(t.selected)).on_click((_e, cx) => onClick(cx))
       .when(isChecked !== null, (el) => el.child(svg(icon(isChecked ? "checkbox-checked" : "checkbox")).size(14).flex_none().text_color(isChecked ? t.accent : t.dim)))
       .when(Boolean(actionIcon), (el) => el.child(svg(icon(actionIcon)).size(11).flex_none().text_color(iconColor ?? t.accent)))
-      .child(div().flex_1().truncate().child(label));
+      .child(div().flex_1().truncate().child(label))
+      .when(Boolean(onRemove), (el) => el.child(div().id(`${id}-remove`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
+        .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Delete")
+        .on_click((_e, cx) => { cx.stop_propagation(); onRemove?.(); cx.notify(); })
+        .child(svg(icon("x")).size(10))));
   }
 
   handleMenuKey(e, cx) {
@@ -1517,6 +1597,7 @@ export default class Hub extends View {
   }
 
   optionRows({ store, def, scrollHandle }) {
+    if (def.field === SAVED_FIELD || def.field === SAVE_FIELD) return this.savedSetRows({ store, def });
     const value = getFilters(store)[def.field];
     const isPinned = (o) => def.isMulti && this.pinned.has(`${def.field}:${o.value}`);
     const options = def.options.filter((o) => this.matchesMenuSearch(o.label))
@@ -1536,6 +1617,26 @@ export default class Hub extends View {
         },
       });
     });
+  }
+
+  // The scope picker's saved sets (✓ on the one in use, ✕ to delete) and its save action.
+  savedSetRows({ store, def }) {
+    const menu = props().menu;
+    if (def.field === SAVE_FIELD) {
+      return [this.menuRow({
+        id: "saved-save", label: def.options[0].label, actionIcon: "filter",
+        onClick: () => {
+          closeOverlay(props().overlay);
+          openSaveFilters({ store, scopeLabel: menu.saveContext?.scopeLabel ?? "", defs: menu.saveContext?.defs ?? [] });
+        },
+      })];
+    }
+    const active = findActiveSet({ sets: getSavedSets(store), filters: getFilters(store), defaults: defaultsFor(store) });
+    return def.options.filter((o) => this.matchesMenuSearch(o.label)).map((o) => this.menuRow({
+      id: `saved-${o.value}`, label: `★ ${o.label}`, isChecked: active?.id === o.value,
+      onClick: () => { applySavedSet({ store, id: o.value }); closeOverlay(props().overlay); },
+      onRemove: () => setShared(SAVED_FILTERS_STORE, removeFilterSet({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store), id: o.value })),
+    }));
   }
 
   skillRows(menu) {
@@ -1673,7 +1774,8 @@ export default class Hub extends View {
       : menu.oncall ? oncallMenuRows({ hub: this, menu })
       : menu.skills ? this.skillRows(menu)
       : groups.filter((def) => groups.length === 1 || def.options.some((o) => this.matchesMenuSearch(o.label))).flatMap((def) => [
-        ...(groups.length > 1 ? [div().flex_none().px(9).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).child(def.title)] : []),
+        ...(groups.length > 1 && def.title ? [div().flex_none().px(9).pt(8).pb(2).text_size(11).font_semibold().text_color(t.muted).child(def.title)] : []),
+        ...(groups.length > 1 && !def.title ? [div().h(1).flex_none().my(3).bg(t.border)] : []),
         ...this.optionRows({ store: menu.store, def, scrollHandle: groups.length === 1 ? this.menuScroll : null }),
       ]);
     this.menuIndex = Math.min(this.menuIndex, Math.max(0, this.menuItems.length - 1));
@@ -1772,6 +1874,7 @@ export default class Hub extends View {
   render(cx) {
     if (this.gh44Dialog) return this.gh44Dialog.render();
     if (this.oncallTextDialog) return this.oncallTextDialog.render();
+    if (this.filterSavePopup) return this.filterSavePopup.render();
     if (this.reportView) return this.reportView.render();
     if (this.isMenu) return this.menuView();
     const settings = readPanelSettings();
