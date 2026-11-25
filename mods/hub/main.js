@@ -1591,7 +1591,7 @@ export default class Hub extends View {
   }
 
   optionRows({ store, def, scrollHandle }) {
-    if (def.field === SAVED_FIELD) return this.savedSetRows({ store, def });
+    if (def.field === SAVED_FIELD) return this.savedSetRows({ store });
     const value = getFilters(store)[def.field];
     const isPinned = (o) => def.isMulti && this.pinned.has(`${def.field}:${o.value}`);
     const options = def.options.filter((o) => this.matchesMenuSearch(o.label))
@@ -1614,12 +1614,15 @@ export default class Hub extends View {
   }
 
   // The scope picker's saved sets: ✓ on the one in use, ✕ to delete.
-  savedSetRows({ store, def }) {
-    const active = findActiveSet({ sets: getSavedSets(store), filters: getFilters(store), defaults: defaultsFor(store) });
-    return def.options.filter((o) => this.matchesMenuSearch(o.label)).map((o) => this.menuRow({
-      id: `saved-${o.value}`, label: `★ ${o.label}`, isChecked: active?.id === o.value,
-      onClick: () => { applySavedSet({ store, id: o.value }); closeOverlay(props().overlay); },
-      onRemove: () => setShared(SAVED_FILTERS_STORE, removeFilterSet({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store), id: o.value })),
+  savedSetRows({ store }) {
+    // Read fresh, not from the menu's props: a set deleted here leaves the list at once.
+    const sets = getSavedSets(store);
+    const active = findActiveSet({ sets, filters: getFilters(store), defaults: defaultsFor(store) });
+    if (sets.length === 0) return [div().flex_none().px(9).py(6).text_color(theme().dim).child("No saved filters")];
+    return sets.filter((set) => this.matchesMenuSearch(set.name)).map((set) => this.menuRow({
+      id: `saved-${set.id}`, label: `★ ${set.name}`, isChecked: active?.id === set.id,
+      onClick: () => { applySavedSet({ store, id: set.id }); closeOverlay(props().overlay); },
+      onRemove: () => setShared(SAVED_FILTERS_STORE, removeFilterSet({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store), id: set.id })),
     }));
   }
 
