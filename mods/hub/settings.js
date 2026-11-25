@@ -19,7 +19,7 @@
 /** @typedef {Record<Tab, TabSkills>} Skills */
 /** @typedef {"ask" | "worktree" | "here"} WhereToRun */
 /** @typedef {"review" | "work" | "ask" | "other"} SkillRole */
-/** @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowOncall: boolean, shouldShowKeyHints: boolean, whereToRun: WhereToRun, skills: Skills }} Settings */
+/** @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowOncall: boolean, shouldShowKeyHints: boolean, shouldShowFilterChips: boolean, whereToRun: WhereToRun, skills: Skills }} Settings */
 /** @typedef {Tab} PanelTab */
 
 // Ask: a built-in action, not a skill. Claude reads the PR or ticket and waits for questions.
@@ -257,6 +257,7 @@ export function getSettings({ saved, installedSkills = null }) {
     shouldShowOncall: s.shouldShowOncall !== false,
     whereToRun: WHERE_TO_RUN.find((w) => w === s.whereToRun) ?? "ask",
     shouldShowKeyHints: s.shouldShowKeyHints !== false,
+    shouldShowFilterChips: s.shouldShowFilterChips !== false,
     skills: {
       github: readTabSkills({ saved: skills.github, tab: "github" }) ?? getDefaultTabSkills({ tab: "github", installedSkills }),
       linear: readTabSkills({ saved: skills.linear, tab: "linear" }) ?? getDefaultTabSkills({ tab: "linear", installedSkills }),

@@ -367,6 +367,7 @@ export class SettingsView {
             }),
             this.settingsToggle({ id: "oncall", label: "Show the On-call tab", isOn: settings.shouldShowOncall, onToggle: () => this.patchSettings({ shouldShowOncall: !settings.shouldShowOncall }) }),
             this.settingsToggle({ id: "hints", label: "Show key hints", isOn: settings.shouldShowKeyHints, onToggle: () => this.patchSettings({ shouldShowKeyHints: !settings.shouldShowKeyHints }) }),
+            this.settingsToggle({ id: "filter-chips", label: "Show active filters inline", isOn: settings.shouldShowFilterChips, onToggle: () => this.patchSettings({ shouldShowFilterChips: !settings.shouldShowFilterChips }) }),
           ],
         }), this.gh44Row()];
       }
