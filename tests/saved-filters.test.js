@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getFilterSets, saveFilterSet, removeFilterSet, findActiveSet, getFilterChips, suggestSetName, MAX_SETS_PER_TAB } from "../mods/hub/saved-filters.js";
+import { getFilterSets, saveFilterSet, removeFilterSet, renameFilterSet, findActiveSet, getFilterChips, suggestSetName, MAX_SETS_PER_TAB } from "../mods/hub/saved-filters.js";
 
 const defaults = { scope: "review", labels: [], checks: "any" };
 const defs = [
@@ -42,4 +42,16 @@ test("chips show the filters in use, by label, and a long pick as any of N", () 
   ]);
   assert.equal(getFilterChips({ defs, filters: { ...defaults, labels: ["bug", "fe", "ux"] }, defaults })[0].text, "any of 3");
   assert.equal(suggestSetName({ scopeLabel: "Review requests", chips: [{ field: "checks", title: "CI", text: "Failing" }] }), "Review requests · Failing");
+});
+
+test("a set is renamed in place; an empty, taken or unknown name changes nothing", () => {
+  let saved = saveFilterSet({ saved: null, tab: "github", name: "One", filters: { checks: "failing" }, id: "a" });
+  saved = saveFilterSet({ saved, tab: "github", name: "Two", filters: {}, id: "b" });
+  const r = renameFilterSet({ saved, tab: "github", id: "a", name: " Failing CI " });
+  assert.equal(r.status, "success");
+  assert.deepEqual(r.status === "success" && getFilterSets({ saved: r.saved, tab: "github" })[0], { id: "a", name: "Failing CI", filters: { checks: "failing" } });
+  assert.deepEqual(renameFilterSet({ saved, tab: "github", id: "a", name: "two" }), { status: "error", reason: "taken" });
+  assert.deepEqual(renameFilterSet({ saved, tab: "github", id: "a", name: "  " }), { status: "error", reason: "empty" });
+  assert.deepEqual(renameFilterSet({ saved, tab: "github", id: "zz", name: "x" }), { status: "error", reason: "missing" });
+  assert.equal(renameFilterSet({ saved, tab: "github", id: "a", name: "ONE" }).status, "success");
 });
