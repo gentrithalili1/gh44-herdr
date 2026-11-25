@@ -78,6 +78,8 @@ const MENU_WIDTH = 240;
 const REFOCUS_AFTER_MENU_MS = 200;
 // The Filters popover is frameless and this big; its visible box grows with the open section.
 const FILTER_POPOVER_WIDTH = 260;
+// The scope picker in the search box: a long saved set name truncates instead of squeezing the search.
+const SCOPE_PICKER_MAX_WIDTH = 150;
 const FILTER_POPOVER_HEIGHT = 580;
 const FILTER_OPTIONS_VISIBLE = 7;
 const SKELETON_ROWS = 4;
@@ -815,11 +817,13 @@ export default class Hub extends View {
     const scopeLabel = scopeDef.options.find((o) => o.value === value)?.label ?? "";
     const activeSet = findActiveSet({ sets: getSavedSets(store), filters, defaults: defaultsFor(store) });
     const search = h_flex().h(30).items_center().rounded(6).border(1).border_color(this.isSearchFocused ? t.accent : t.input).bg(t.background).overflow_hidden()
-      .child(h_flex().id(`scope-${scopeDef.field}`).h_full().px(8).gap(4).items_center().flex_none().cursor_pointer()
+      .child(h_flex().id(`scope-${scopeDef.field}`).h_full().max_w(SCOPE_PICKER_MAX_WIDTH).px(8).gap(4).items_center().flex_none().cursor_pointer()
         .text_size(12).text_color(t.foreground).bg(t.raised).hover((s) => s.bg(t.hover))
         .on_mouse_down("left", pressMenuButton)
         .on_click(() => openMenu({ store, groups: [scopeDef, ...savedSetGroups(store)], align: "left" }))
-        .child(activeSet ? `★ ${activeSet.name}` : scopeLabel).child(svg(icon("chevron")).size(12).text_color(t.muted)))
+        .tooltip(activeSet ? `★ ${activeSet.name}` : scopeLabel)
+        .child(div().min_w(0).truncate().child(activeSet ? `★ ${activeSet.name}` : scopeLabel))
+        .child(svg(icon("chevron")).size(12).flex_none().text_color(t.muted)))
       .child(div().w(1).h_full().bg(t.border))
       .child(h_flex().flex_1().min_w(0).px(8).gap(6).items_center()
         .child(svg(icon("search")).size(13).text_color(t.dim))
@@ -1543,13 +1547,13 @@ export default class Hub extends View {
 
   // An action row gets a leading `actionIcon`; a choice row (`isChecked` set) gets a leading checkbox.
   // isDisabled: dimmed, not clickable and skipped by ↑/↓. isLoading: a spinner in place of the icon.
-  // onRemove: a trailing ✕, like a saved filter set's delete.
+  // onEdit, onRemove: a trailing ✎ and ✕, like a saved filter set's rename and delete.
   /**
    * @param {{ id: string, label: string, actionIcon?: string | null, iconColor?: string | null, isChecked?: boolean | null,
    *   onClick: (cx: import("gpui-kit").Context) => void, scroll?: { handle: any, index: number } | null, isDisabled?: boolean, isLoading?: boolean,
-   *   onRemove?: (() => void) | null }} params
+   *   onRemove?: (() => void) | null, onEdit?: (() => void) | null }} params
    */
-  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null, isDisabled = false, isLoading = false, onRemove = null }) {
+  menuRow({ id, label, actionIcon = null, iconColor = null, isChecked = null, onClick, scroll = null, isDisabled = false, isLoading = false, onRemove = null, onEdit = null }) {
     const t = theme();
     if (isDisabled) {
       return h_flex().id(id).h(MENU_ROW_HEIGHT).flex_none().px(9).gap(8).items_center().rounded(6).bg(t.popover).text_color(t.dim)
@@ -1564,6 +1568,10 @@ export default class Hub extends View {
       .when(isChecked !== null, (el) => el.child(svg(icon(isChecked ? "checkbox-checked" : "checkbox")).size(14).flex_none().text_color(isChecked ? t.accent : t.dim)))
       .when(Boolean(actionIcon), (el) => el.child(svg(icon(actionIcon)).size(11).flex_none().text_color(iconColor ?? t.accent)))
       .child(div().flex_1().truncate().child(label))
+      .when(Boolean(onEdit), (el) => el.child(div().id(`${id}-edit`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
+        .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Rename")
+        .on_click((_e, cx) => { cx.stop_propagation(); onEdit?.(); })
+        .child(svg(icon("pencil")).size(11))))
       .when(Boolean(onRemove), (el) => el.child(div().id(`${id}-remove`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
         .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Delete")
         .on_click((_e, cx) => { cx.stop_propagation(); onRemove?.(); cx.notify(); })
@@ -1613,7 +1621,7 @@ export default class Hub extends View {
     });
   }
 
-  // The scope picker's saved sets: ✓ on the one in use, ✕ to delete.
+  // The scope picker's saved sets: ✓ on the one in use, ✎ to rename, ✕ to delete.
   savedSetRows({ store }) {
     // Read fresh, not from the menu's props: a set deleted here leaves the list at once.
     const sets = getSavedSets(store);
@@ -1623,6 +1631,10 @@ export default class Hub extends View {
       id: `saved-${set.id}`, label: `★ ${set.name}`, isChecked: active?.id === set.id,
       onClick: () => { applySavedSet({ store, id: set.id }); closeOverlay(props().overlay); },
       onRemove: () => setShared(SAVED_FILTERS_STORE, removeFilterSet({ saved: shared(SAVED_FILTERS_STORE), tab: tabOfStore(store), id: set.id })),
+      onEdit: () => {
+        closeOverlay(props().overlay);
+        openOverlay({ mod: "hub", kind: "popup", ...SAVE_POPUP_SIZE, at: "pointer", props: { saveFilters: { tab: tabOfStore(store), filters: set.filters, name: set.name, editId: set.id } } });
+      },
     }));
   }
 

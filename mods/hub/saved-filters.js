@@ -39,6 +39,17 @@ export function saveFilterSet({ saved, tab, name, filters, id }) {
   return { ...all, [tab]: next };
 }
 
+// Renames one set. Another set already has that name (any case): nothing changes.
+/** @param {{ saved: unknown, tab: Tab, id: string, name: string }} params @returns {{ status: "success", saved: Record<string, unknown> } | { status: "error", reason: "empty" | "taken" | "missing" }} */
+export function renameFilterSet({ saved, tab, id, name }) {
+  const title = name.trim().slice(0, MAX_SET_NAME);
+  if (!title) return { status: "error", reason: "empty" };
+  const sets = getFilterSets({ saved, tab });
+  if (!sets.some((s) => s.id === id)) return { status: "error", reason: "missing" };
+  if (sets.some((s) => s.id !== id && s.name.toLowerCase() === title.toLowerCase())) return { status: "error", reason: "taken" };
+  return { status: "success", saved: { ...toRecord(saved), [tab]: sets.map((s) => (s.id === id ? { ...s, name: title } : s)) } };
+}
+
 /** @param {{ saved: unknown, tab: Tab, id: string }} params @returns {Record<string, unknown>} */
 export function removeFilterSet({ saved, tab, id }) {
   return { ...toRecord(saved), [tab]: getFilterSets({ saved, tab }).filter((s) => s.id !== id) };
