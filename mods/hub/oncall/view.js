@@ -342,12 +342,17 @@ export class OncallView {
       if (current) return { tone: "checking", text: `Triaging ${current.shortId}: ${current.title} · ${projects}` };
       return { tone: "connected", text: listening };
     };
+    // [↻ Check now | ▾] while the service runs, else [Go on call | ▾]: the strips' split button and
+    // ▾ menu, which holds Triage issue.
     const getAction = () => {
-      if (isRunning) {
-        return button({ id: "oncall-check-now", label: isChecking() ? "Checking…" : "Check now", variant: isChecking() ? "busy" : "normal", onClick: (cx) => this.handleCheckNow(cx) });
-      }
-      if (config.isOn) return null;
-      return button({ id: "oncall-go-on", label: state.isStarting ? "Starting…" : "Go on call", variant: state.isStarting ? "busy" : "primary", onClick: (cx) => this.handleGoOnCall(cx) });
+      if (config.isOn && !isRunning) return null;
+      /** @type {import("../row-action.js").RowMenuSection[]} */
+      const sections = [{ id: "more", title: null, items: [{ kind: "command", id: "triage", label: "Triage issue", icon: "play", command: "hub.oncall-triage" }] }];
+      const menu = { tab: "oncall", skills: /** @type {string[]} */ ([]), sections };
+      const primary = isRunning
+        ? { label: isChecking() ? "Checking…" : "Check now", icon: "refresh", isLoading: isChecking(), tip: "Check the tracker now", run: (/** @type {import("gpui-kit").Context} */ cx) => this.handleCheckNow(cx) }
+        : { label: state.isStarting ? "Starting…" : "Go on call", icon: "oncall", isLoading: state.isStarting, tip: "Start the checks in the background", run: (/** @type {import("gpui-kit").Context} */ cx) => this.handleGoOnCall(cx) };
+      return this.hub.stripButton({ id: "oncall-status-action", primary: { ...primary, style: "quiet", status: null }, menu });
     };
     const isCountingDown = !current && isRunning && !service?.lastError && nextIn !== null && nextIn > 0;
     const filled = Math.round((1 - getCountdownLeft({ msLeft: nextIn ?? 0, periodMs: config.pollMinutes * MINUTE_MS })) * 100);

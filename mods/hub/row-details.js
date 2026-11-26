@@ -133,16 +133,22 @@ export class RowDetailsDialog {
     return [...skills, ...links, ...rowActions, ...agent];
   }
 
-  // Label and value; a value with a url opens it.
+  // Label and value in its tone (a link in the accent); a value with a url opens it, one with parts
+  // shows each part in its own tone (a diff's +/−).
   /** @param {import("./row-action.js").DetailRow} fact */
   factRow(fact) {
     const t = theme();
-    const color = fact.tone ? palette(t)[fact.tone] ?? t[fact.tone] : t.foreground;
-    const value = div().id(`details-fact-${fact.label}`).flex_1().min_w(0).truncate().text_color(color)
+    /** @param {string | null} tone */
+    const toColor = (tone) => (tone ? palette(t)[tone] ?? t[tone] ?? t.foreground : t.foreground);
+    const color = fact.url !== null && !fact.tone ? t.accent : toColor(fact.tone);
+    const parts = fact.parts ?? [];
+    const value = h_flex().id(`details-fact-${fact.label}`).flex_1().min_w(0).gap(4).items_center().text_color(color)
       .when(fact.isMono, (el) => el.font_family(MONO_FONT))
-      .when(fact.url !== null, (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground)).tooltip("Open")
+      .when(fact.url !== null, (el) => el.cursor_pointer().hover((s) => s.opacity(0.8)).tooltip("Open")
         .on_click((_e, cx) => cx.open_url(fact.url ?? "")))
-      .child(fact.value);
+      .when(parts.length === 0, (el) => el.child(div().min_w(0).truncate().child(fact.value)))
+      .children(parts.map((part, i) => div().id(`details-fact-${fact.label}-${i}`).flex_none().font_family(MONO_FONT).text_color(toColor(part.tone)).child(part.text)))
+      .when(fact.url !== null, (el) => el.child(svg(icon("link")).size(11).flex_none().text_color(t.accent)));
     return h_flex().h(FACT_ROW_HEIGHT).flex_none().items_center().text_size(12.5)
       .child(div().w(FACT_LABEL_WIDTH).flex_none().text_color(t.dim).child(fact.label))
       .child(value);

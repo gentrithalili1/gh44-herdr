@@ -50,10 +50,10 @@ const formatElapsed = (ms) => {
 const getAgentStatus = ({ agent, now }) => {
   const elapsed = agent.since === null ? null : formatElapsed(now - toEpochMs(agent.since));
   switch (agent.status) {
-    case "working": return { tone: "working", text: "● working", elapsed };
-    case "blocked": return { tone: "blocked", text: "! needs you", elapsed };
+    case "working": return { tone: "working", text: "working", elapsed };
+    case "blocked": return { tone: "blocked", text: "needs you", elapsed };
     case "idle": return { tone: "idle", text: "idle", elapsed: null };
-    case "done": return { tone: "done", text: "✓ done", elapsed: null };
+    case "done": return { tone: "done", text: "done", elapsed: null };
     default: {
       /** @type {never} */
       const unknownStatus = agent.status;
@@ -91,10 +91,12 @@ const getNextStep = ({ agent, afterDone, skill }) => {
   };
 };
 
-// An agent that needs you, or one still on the row (a done one only when its tab stays on the button).
+// An agent that needs you, one at work (the button says so), or one still on the row (a done one
+// only when its tab stays on the button). Each goes to the agent's tab.
 /** @param {{ agent: RowAgent | null, isKeepingAgent: boolean }} params */
 const getAgentAction = ({ agent, isKeepingAgent }) => {
   if (agent?.status === "blocked") return toAction({ kind: "agent", label: "answer", icon: "resume", style: "alert", tip: `Answer ${agent.tabName}` });
+  if (agent?.status === "working") return toAction({ kind: "agent", label: "working", icon: "resume", tip: `${agent.tabName} is working. Go to its tab` });
   if (agent && (agent.status !== "done" || isKeepingAgent)) return toAction({ kind: "agent", label: "open tab", icon: "resume", tip: `Go to ${agent.tabName}` });
   return null;
 };
@@ -230,7 +232,8 @@ export function getNewlyBlocked({ previous, rows }) {
  *   | { kind: "oncall", id: OncallMenuId, key: string | null }
  *   | { kind: "agent" }
  *   | { kind: "details" }
- *   | { kind: "editCase" }} RowMenuItem
+ *   | { kind: "editCase" }
+ *   | { kind: "command", id: string, label: string, icon: string, command: string }} RowMenuItem
  */
 /** @typedef {{ id: "suggested" | "other" | "links" | "more", title: string | null, items: RowMenuItem[] }} RowMenuSection */
 
@@ -300,18 +303,31 @@ export function getOncallRowMenu({ suggested, list, hasReport, hasSession, isSee
 
 /** @typedef {import("./oncall/decisions.js").Decision} Decision */
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** @param {number} n */
+const twoDigits = (n) => String(n).padStart(2, "0");
+
+// When something happened, in local time: "14:32" today, "Nov 24 14:32" before. Herdr's runtime has no Intl.
+/** @param {{ at: number, now: number }} params */
+export const formatClock = ({ at, now }) => {
+  const date = new Date(at);
+  const time = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+  return date.toDateString() === new Date(now).toDateString() ? time : `${MONTHS[date.getMonth()]} ${date.getDate()} ${time}`;
+};
+
 /** @param {{ count: number, word: string }} params */
 const plural = ({ count, word }) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-// An On-call row's meta facts, only those it has: new (unseen), its project, a regression, events
-// and users, and how long ago it was decided.
+// An On-call row's meta facts, only those it has: new (unseen), when it was decided ("14:32 (2h ago)"),
+// its project, a regression, events and users.
 /** @param {{ decision: Decision, isUnseen: boolean, now?: number }} params @returns {string[]} */
 export function getDecisionFacts({ decision: d, isUnseen, now = Date.now() }) {
   const isRegression = d.kind === "regressed" || d.kind === "escalating";
   const impact = [d.count > 0 ? plural({ count: d.count, word: "event" }) : null, d.userCount > 0 ? plural({ count: d.userCount, word: "user" }) : null]
     .filter((part) => part !== null).join(" · ");
   const decidedAt = Date.parse(d.decidedAt);
-  const facts = [isUnseen ? "new" : null, d.project || null, isRegression ? d.kind : null, impact || null, Number.isFinite(decidedAt) ? formatElapsed(now - decidedAt) : null];
+  const time = Number.isFinite(decidedAt) ? `${formatClock({ at: decidedAt, now })} (${formatElapsed(now - decidedAt)} ago)` : null;
+  const facts = [isUnseen ? "new" : null, time, d.project || null, isRegression ? d.kind : null, impact || null];
   return facts.filter((fact) => fact !== null);
 }
 
@@ -361,6 +377,37 @@ export function getPullRequestFacts({ pr, groupId, login, now = Date.now() }) {
   const ci = checks && pr.ci !== "passing" && !reasons.includes(checks) ? [checks] : [];
   const age = formatAge({ iso: pr.createdAt, now });
   return [...reasons, ...ci, ...(age ? [age] : []), `+${pr.additions} −${pr.deletions}`];
+}
+
+// The status facts a strip colors: trouble red, waiting amber, good green.
+/** @type {Record<string, FactTone>} */
+const FACT_TONE = {
+  conflicts: "danger", "checks failing": "danger", "changes requested": "danger", "triage failed": "danger",
+  "checks running": "warning", regressed: "warning", escalating: "warning",
+  approved: "success", "checks passing": "success",
+};
+const DIFF_FACT = /^\+(\d+) −(\d+)$/;
+
+// A meta fact in colored parts: a diff ("+44 −6") green and red, a known status in its tone, else plain.
+/** @param {string} fact @returns {FactPart[]} */
+export function getFactParts(fact) {
+  const diff = DIFF_FACT.exec(fact);
+  if (diff) return [{ text: `+${diff[1]}`, tone: "success" }, { text: `−${diff[2]}`, tone: "danger" }];
+  return [{ text: fact, tone: FACT_TONE[fact] ?? null }];
+}
+
+// A meta line's facts as runs: plain facts next to each other join into one text, a colored fact
+// stands alone in its parts.
+/** @typedef {{ kind: "plain", text: string } | { kind: "colored", parts: FactPart[] }} FactSegment */
+/** @param {string[]} facts @returns {FactSegment[]} */
+export function getFactSegments(facts) {
+  return facts.reduce((/** @type {FactSegment[]} */ segments, fact) => {
+    const parts = getFactParts(fact);
+    const last = segments[segments.length - 1];
+    if (parts.some((part) => part.tone !== null)) return [...segments, { kind: "colored", parts }];
+    if (last?.kind === "plain") return [...segments.slice(0, -1), { kind: "plain", text: `${last.text} · ${fact}` }];
+    return [...segments, { kind: "plain", text: fact }];
+  }, []);
 }
 
 // ---------- link entries ----------
@@ -491,9 +538,11 @@ export function getTicketActions({ skills, issue }) {
 
 // ---------- row details ----------
 
-/** @typedef {"success" | "danger" | "warning"} FactTone */
-// tone: a palette tone or an agent status; null: plain text.
-/** @typedef {{ label: string, value: string, tone: FactTone | AgentStatus | null, isMono: boolean, url: string | null }} DetailRow */
+/** @typedef {"success" | "danger" | "warning" | "dim"} FactTone */
+// A piece of a fact in its own color: "+44" green, "−6" red.
+/** @typedef {{ text: string, tone: FactTone | null }} FactPart */
+// tone: a palette tone or an agent status; null: plain text. parts: the value in colored pieces, in place of value's tone.
+/** @typedef {{ label: string, value: string, tone: FactTone | AgentStatus | null, isMono: boolean, url: string | null, parts: FactPart[] | null }} DetailRow */
 /** @typedef {{ skill: string, key: string | null, reason: string | null, isMain: boolean }} DetailSuggestion */
 // A link of the row: a page to open, or (url null) a link entry the panel runs on the row.
 /** @typedef {{ label: string, icon: string, url: string | null, entry: string | null }} DetailLink */
@@ -511,8 +560,8 @@ export function getTicketActions({ skills, issue }) {
 
 const ASK_REASON = "reads it, changes no code";
 
-/** @param {{ text: string, value?: string, tone?: DetailRow["tone"], isMono?: boolean, url?: string | null }} params @returns {DetailRow} */
-const toRow = ({ text, value = "", tone = null, isMono = false, url = null }) => ({ label: text, value, tone, isMono, url });
+/** @param {{ text: string, value?: string, tone?: DetailRow["tone"], isMono?: boolean, url?: string | null, parts?: FactPart[] | null }} params @returns {DetailRow} */
+const toRow = ({ text, value = "", tone = null, isMono = false, url = null, parts = null }) => ({ label: text, value, tone, isMono, url, parts });
 
 // Why someone else's PR is on your list.
 /** @param {{ pr: DetailPullRequest, groupId: PullRequestGroupId, login: string | null }} params */
@@ -566,6 +615,8 @@ const getIssueCaseFacts = (issue) => {
 
 /** @type {Record<string, { value: string, tone: FactTone | null }>} */
 const CHECKS_STATUS = { passing: { value: "passing", tone: "success" }, failing: { value: "failing", tone: "danger" }, pending: { value: "running", tone: "warning" } };
+/** @type {{ value: string, tone: FactTone }} */
+const NO_CHECKS = { value: "none", tone: "dim" };
 /** @type {Record<string, { value: string, tone: FactTone | null }>} */
 const REVIEW_STATUS = {
   APPROVED: { value: "approved", tone: "success" },
@@ -576,20 +627,27 @@ const REVIEW_STATUS = {
 /** @param {DetailPullRequest} pr @returns {DetailRow[]} */
 const getPullRequestStatus = (pr) => [
   toRow({ text: "Merge", value: pr.hasConflicts ? "conflicts" : "no conflicts", tone: pr.hasConflicts ? "danger" : "success" }),
-  toRow({ text: "Checks", ...(CHECKS_STATUS[pr.ci] ?? { value: "none" }) }),
-  toRow({ text: "Review", ...((pr.decision ? REVIEW_STATUS[pr.decision] : null) ?? { value: "no decision" }) }),
-  toRow({ text: "Size", value: `+${pr.additions} −${pr.deletions}` }),
+  toRow({ text: "Checks", ...(CHECKS_STATUS[pr.ci] ?? NO_CHECKS) }),
+  toRow({ text: "Review", ...((pr.decision ? REVIEW_STATUS[pr.decision] : null) ?? { value: "no decision", tone: "dim" }) }),
+  toRow({ text: "Size", value: `+${pr.additions} −${pr.deletions}`, parts: getFactParts(`+${pr.additions} −${pr.deletions}`) }),
   ...(pr.branch ? [toRow({ text: "Branch", value: pr.branch, isMono: true })] : []),
 ];
+
+// A Linear state's tone by its type: started amber, done green, canceled dim, the rest plain.
+/** @type {Record<string, FactTone>} */
+const STATE_TONE = { started: "warning", completed: "success", canceled: "dim" };
+// Urgent red, high amber, no priority dim.
+/** @type {Record<number, FactTone>} */
+const PRIORITY_TONE = { 0: "dim", 1: "danger", 2: "warning" };
 
 /** @param {DetailIssue} issue @returns {DetailRow[]} */
 const getIssueStatus = (issue) => {
   const priority = PRIORITY_OPTIONS.find((p) => p.value === issue.priority);
   return [
-    toRow({ text: "State", value: issue.state }),
-    ...(priority ? [toRow({ text: "Priority", value: priority.label })] : []),
+    toRow({ text: "State", value: issue.state, tone: STATE_TONE[issue.stateType] ?? null }),
+    ...(priority ? [toRow({ text: "Priority", value: priority.label, tone: PRIORITY_TONE[priority.value] ?? null })] : []),
     ...(issue.project ? [toRow({ text: "Project", value: issue.project })] : []),
-    toRow({ text: "Assignee", value: issue.assignee ?? UNASSIGNED }),
+    toRow({ text: "Assignee", value: issue.assignee ?? UNASSIGNED, tone: issue.assignee ? null : "dim" }),
     ...(issue.prUrl ? [toRow({ text: "PR", value: `#${issue.prUrl.split("/").pop()}`, isMono: true, url: issue.prUrl })] : []),
     ...(issue.branch ? [toRow({ text: "Branch", value: issue.branch, isMono: true })] : []),
   ];
@@ -599,6 +657,8 @@ const getIssueStatus = (issue) => {
 const SEVERITY_TONE = { critical: "danger", high: "warning" };
 /** @type {Record<string, string>} */
 const OWNER_TEXT = { mine: "my team", other: "another team", unclear: "unclear" };
+/** @type {Record<string, FactTone>} */
+const OWNER_TONE = { mine: "warning", other: "dim" };
 
 // An On-call row's case, as the reason a skill of that case is suggested.
 /** @param {Decision} d @returns {CaseFact[]} */
@@ -624,16 +684,19 @@ const getDecisionCaseFacts = (d) => {
 };
 
 // What the decision knows about the issue: the AI's severity, whose code it is and the cause it
-// found, the project, counts, who decided and the rule it matched. Unknown ones leave.
-/** @param {Decision} d @returns {DetailRow[]} */
-const getDecisionStatus = (d) => [
+// found, the project, counts, when it was decided and last seen, who decided and the rule it matched.
+// Unknown ones leave.
+/** @param {{ decision: Decision, now: number }} params @returns {DetailRow[]} */
+const getDecisionStatus = ({ decision: d, now }) => [
   ...(d.severity ? [toRow({ text: "Severity", value: d.severity, tone: SEVERITY_TONE[d.severity] ?? null })] : []),
-  ...(d.owner ? [toRow({ text: "Owner", value: OWNER_TEXT[d.owner] ?? d.owner })] : []),
+  ...(d.owner ? [toRow({ text: "Owner", value: OWNER_TEXT[d.owner] ?? d.owner, tone: OWNER_TONE[d.owner] ?? null })] : []),
   ...(d.summary ? [toRow({ text: "Cause", value: d.summary })] : []),
   ...(d.project ? [toRow({ text: "Project", value: d.project })] : []),
   toRow({ text: "Events", value: String(d.count) }),
   toRow({ text: "Users", value: String(d.userCount) }),
-  toRow({ text: "Decided by", value: getDecidedBy(d) }),
+  ...(Number.isFinite(Date.parse(d.decidedAt)) ? [toRow({ text: "Decided", value: formatClock({ at: Date.parse(d.decidedAt), now }) })] : []),
+  ...(Number.isFinite(Date.parse(d.lastSeen)) ? [toRow({ text: "Last seen", value: `${formatElapsed(now - Date.parse(d.lastSeen))} ago` })] : []),
+  toRow({ text: "Decided by", value: getDecidedBy(d), tone: d.outcome === "failed" ? "danger" : null }),
   ...(d.matchedRule ? [toRow({ text: "Rule", value: d.matchedRule })] : []),
 ];
 
@@ -655,10 +718,10 @@ const getAgentRows = ({ agent, worktree, repoMain, now }) => {
 };
 
 /**
- * @param {DetailRowSource} row
+ * @param {{ row: DetailRowSource, now: number }} params
  * @returns {{ tab: import("./settings.js").Tab, facts: CaseFact[], status: DetailRow[], owner: string | null }}
  */
-const getRowFacts = (row) => {
+const getRowFacts = ({ row, now }) => {
   switch (row.kind) {
     case "pullRequest": return {
       tab: /** @type {const} */ ("github"),
@@ -675,7 +738,7 @@ const getRowFacts = (row) => {
     case "decision": return {
       tab: /** @type {const} */ ("oncall"),
       facts: getDecisionCaseFacts(row.decision),
-      status: getDecisionStatus(row.decision),
+      status: getDecisionStatus({ decision: row.decision, now }),
       owner: null,
     };
     default: {
@@ -696,7 +759,7 @@ const getRowFacts = (row) => {
  * @returns {RowDetails}
  */
 export function getRowDetails({ row, skills, menu, agent, worktree, repoMain, main, now = Date.now() }) {
-  const { tab, facts, status, owner } = getRowFacts(row);
+  const { tab, facts, status, owner } = getRowFacts({ row, now });
   /** @param {string} skill */
   const getReason = (skill) => {
     if (skill === ASK_ACTION) return ASK_REASON;

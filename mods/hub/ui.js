@@ -57,8 +57,6 @@ const TINT = "1f";
 const SPLIT_LINE = "40";
 const HOVER_FILL = "d9";
 const HOVER_TINT = "33";
-// The action column under a working agent or one that needs you.
-export const STATUS_TINT = "14";
 
 // The split button's colors per style (row-action.js RowActionStyle).
 /**

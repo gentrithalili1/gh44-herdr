@@ -16,19 +16,20 @@ import {
 } from "./github.js";
 import { loadIssues, loadLinearMeta } from "./linear.js";
 import {
-  icon, palette, stop, toAnchor, holderLook, splitButtonLook, STATUS_TINT, MONO_FONT, GUTTER, HOLDER_WIDTH, ACTION_COLUMN_WIDTH, SPLIT_BUTTON_HEIGHT,
+  icon, palette, stop, toAnchor, holderLook, splitButtonLook, MONO_FONT, GUTTER, HOLDER_WIDTH, ACTION_COLUMN_WIDTH, SPLIT_BUTTON_HEIGHT,
 } from "./ui.js";
 import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { button } from "./controls.js";
 import {
-  getRowAction, getRowMenu, getPullRequestFacts, getRowDetails, getCaseRunPlace, getNewlyBlocked, getPullRequestLinks, getPullRequestActions,
+  getRowAction, getRowMenu, getPullRequestFacts, getFactSegments, getRowDetails, getCaseRunPlace, getNewlyBlocked, getPullRequestLinks, getPullRequestActions,
   getTicketActions, formatNames,
 } from "./row-action.js";
 import { RowDetailsDialog, ROW_DETAILS_DIALOG, openRowDetails } from "./row-details.js";
 import { CaseEditorDialog, CASE_EDITOR_DIALOG, openCaseEditor, getCaseLabel } from "./case-editor.js";
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
 import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall/text-dialog.js";
+import { OncallTriageDialog, ONCALL_TRIAGE_DIALOG, openOncallTriageDialog } from "./oncall/triage-dialog.js";
 import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall/client.js";
 import { OncallView, ReportView, runSkillOnIssue, runOncallAction, ONCALL_MENU_ITEMS } from "./oncall/view.js";
 import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall/decisions.js";
@@ -111,6 +112,9 @@ const SKELETON_ROWS = 4;
 /** @type {Record<string, string>} */
 const PR_GROUP_GLYPH = { fix: "x", merge: "check", rereview: "refresh", review: "state-review", waiting: "state-progress", reviewed: "check", draft: "state-backlog" };
 const STRIP_MIN_HEIGHT = 46;
+const SPINNER_ICON = "mods/workspace-chrome/spinner.svg";
+const SPINNER_PERIOD_MS = 900;
+const IDLE_RING_SIZE = 8;
 const HOLDER_GLYPH_SIZE = 13;
 const STAGE_STATUS = { backlog: "neutral", todo: "quiet", progress: "warning", review: "warning" };
 const URGENT = 1;
@@ -471,6 +475,10 @@ export default class Hub extends View {
       this.oncallTextDialog = new OncallTextDialog({ cx, field: props().field });
       return;
     }
+    if (props()?.dialog === ONCALL_TRIAGE_DIALOG) {
+      this.oncallTriageDialog = new OncallTriageDialog({ cx, openSelect });
+      return;
+    }
     if (props()?.dialog === CASE_EDITOR_DIALOG) {
       this.caseEditorDialog = new CaseEditorDialog({
         cx, editor: props().editor, getSettings: readPanelSettings, getRowSkills, getSession: () => session, saveSkills, getRole, openSelect,
@@ -587,6 +595,8 @@ export default class Hub extends View {
         if (section) this.settingsView.open({ cx, section });
         // `herdr-app do hub.gh44-skills`: the gh44 skills dialog.
         if (command === "gh44-skills") openGh44Dialog();
+        // `herdr-app do hub.oncall-triage`: triage an issue by its link (bindable in keys.json).
+        if (command === "oncall-triage") openOncallTriageDialog();
         // `herdr-app do hub.oncall-start` / `hub.oncall-stop`: go on or off call (bindable in keys.json).
         if (command === "oncall-start" || command === "oncall-stop") await this.switchOncall({ isOn: command === "oncall-start" });
         if (command === "cleanup") await this.runCleanup(cx);
@@ -1059,9 +1069,26 @@ export default class Hub extends View {
     const dot = () => div().flex_none().px(5).child("·");
     return h_flex().min_w(0).items_center().text_size(12).text_color(t.dim)
       .children(refs.flatMap((r, i) => (i === 0 ? [ref(r)] : [dot(), ref(r)])))
-      .when(facts.length > 0, (el) => el.child(dot()).child(div().flex_1().min_w(0).truncate().child(facts.join(" · "))))
+      .when(facts.length > 0, (el) => el.child(dot()).child(this.factsLine(facts)))
       .when(facts.length === 0, (el) => el.child(div().flex_1()))
       .when(labels.length > 0, (el) => el.child(div().flex_none().pl(6).child(this.labelsMore({ id, labels, colors: labelColors }))));
+  }
+
+  // The facts, each in its tone (a diff's + green and − red, "checks failing" red). Colored facts
+  // always show whole; plain ones next to each other join into one dim run that cuts off first.
+  /** @param {string[]} facts */
+  factsLine(facts) {
+    const t = theme();
+    const colors = palette(t);
+    /** @param {import("./row-action.js").FactPart} part */
+    const toColor = (part) => (part.tone ? colors[part.tone] ?? t[part.tone] ?? t.dim : t.dim);
+    const segments = getFactSegments(facts);
+    const dot = () => div().flex_none().px(5).child("·");
+    return h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap()
+      .children(segments.map((segment, i) => (segment.kind === "plain"
+        ? h_flex().min_w(0).overflow_hidden().when(i > 0, (el) => el.child(dot())).child(div().min_w(0).truncate().child(segment.text))
+        : h_flex().flex_none().when(i > 0, (el) => el.child(dot()))
+          .child(h_flex().gap(4).children(segment.parts.map((part) => div().text_color(toColor(part)).child(part.text)))))));
   }
 
   // A strip: the holder end in its group's tone with a state glyph, the title over one meta line,
@@ -1075,10 +1102,6 @@ export default class Hub extends View {
     const tab = currentTab();
     const isSelected = this.selected[tab] === id;
     const look = holderLook({ t, tone: holder.tone });
-    const status = primary.status;
-    const statusColor = status ? t[status.tone] ?? t.dim : t.dim;
-    // A working agent or one that needs you tints its action column.
-    const isTinted = status?.tone === "working" || status?.tone === "blocked";
     return h_flex().id(`row-${id}`).flex_none().mx(GUTTER - 4).mb(3).min_h(STRIP_MIN_HEIGHT).rounded(4).overflow_hidden()
       .bg(t.popover).border(1).border_color(isSelected ? t.input : t.border)
       .on_click((_e, cx) => {
@@ -1092,31 +1115,43 @@ export default class Hub extends View {
       .child(v_flex().flex_1().min_w(0).px(10).py(6).gap(2).justify_center()
         .child(div().truncate().text_size(13.5).font_medium().text_color(isTitleDim ? t.muted : t.foreground).child(title))
         .child(meta))
-      .child(v_flex().w(ACTION_COLUMN_WIDTH).flex_none().self_stretch().px(5).py(6).gap(4).items_center().justify_center()
+      // As wide as its button (up to ACTION_COLUMN_WIDTH), so a short one leaves no gap after the title.
+      .child(h_flex().max_w(ACTION_COLUMN_WIDTH).flex_none().self_stretch().px(8).items_center().justify_end()
         .border_l(1).border_color(t.border)
-        .when(isTinted, (el) => el.bg(`${statusColor}${STATUS_TINT}`))
-        .when(Boolean(status), (el) => el.child(h_flex().max_w_full().gap(4).items_center().text_size(11.5).font_semibold().text_color(statusColor)
-          .child(div().min_w(0).truncate().child(status.text))
-          .when(Boolean(status.elapsed), (line) => line.child(div().flex_none().font_family(MONO_FONT).text_size(11).font_normal().child(status.elapsed)))))
         .child(this.stripButton({ id: `run-${id}`, primary, menu })));
   }
 
   // [▶ review | ▾] in a strip: the main part runs the row's main action, ▾ opens its menu.
   // Filled for a step to take, outlined for an agent or a link, red when an agent needs you.
+  // The row's agent shows in the button itself: its mark leads (spinning while it works, a check
+  // once done, a ring while idle) and how long it has worked or waited follows the label.
   /** @param {{ id: string, primary: ReturnType<Hub["primaryFor"]>, menu: Record<string, any> }} params */
   stripButton({ id, primary, menu }) {
     const t = theme();
     const look = splitButtonLook({ t, style: primary.style });
-    const mark = primary.isLoading
-      ? svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(look.text).spin(900)
-      : svg(icon(primary.icon)).size(11).flex_none().text_color(look.text);
+    const status = primary.status;
+    // On a filled button the mark takes the button's ink; on a quiet one, the agent's color.
+    const statusColor = status && primary.style === "quiet" ? t[status.tone] ?? look.text : look.text;
+    const getMark = () => {
+      if (primary.isLoading) return svg(SPINNER_ICON).size(11).flex_none().text_color(look.text).spin(SPINNER_PERIOD_MS);
+      switch (status?.tone) {
+        case "working": return svg(SPINNER_ICON).size(11).flex_none().text_color(statusColor).spin(SPINNER_PERIOD_MS);
+        case "blocked": return svg(icon("alert")).size(11).flex_none().text_color(statusColor);
+        case "done": return svg(icon("check")).size(11).flex_none().text_color(statusColor);
+        case "idle": return div().size(IDLE_RING_SIZE).mx(1.5).flex_none().rounded(IDLE_RING_SIZE).border(1.5).border_color(t.dim);
+        default: return svg(icon(primary.icon)).size(11).flex_none().text_color(look.text);
+      }
+    };
+    const elapsed = status?.elapsed ?? null;
+    const tip = status ? `Agent ${status.text}${elapsed ? ` for ${elapsed}` : ""}. ${primary.tip}` : primary.tip;
     return h_flex().id(id).max_w_full().h(SPLIT_BUTTON_HEIGHT).flex_none().items_center().rounded(6).overflow_hidden()
       .bg(look.bg).border(1).border_color(look.border).text_size(12).font_medium().text_color(look.text)
-      .child(h_flex().id(`${id}-run`).min_w(0).h_full().pl(7).pr(6).gap(4).items_center().cursor_pointer()
-        .hover((s) => s.bg(look.hover)).tooltip(primary.tip)
+      .child(h_flex().id(`${id}-run`).min_w(0).h_full().pl(7).pr(6).gap(5).items_center().cursor_pointer()
+        .hover((s) => s.bg(look.hover)).tooltip(tip)
         .on_mouse_down("left", pressMenuButton).on_click((_e, cx) => { cx.stop_propagation(); primary.run(cx); })
-        .child(mark)
-        .child(div().min_w(0).truncate().child(primary.label)))
+        .child(getMark())
+        .child(div().min_w(0).truncate().child(primary.label))
+        .when(elapsed !== null, (el) => el.child(div().flex_none().font_family(MONO_FONT).text_size(11).font_normal().opacity(0.7).child(elapsed ?? ""))))
       .child(div().w(1).h_full().flex_none().bg(look.divider))
       .child(div().id(`${id}-more`).h_full().px(4).flex_none().flex().items_center().cursor_pointer()
         .hover((s) => s.bg(look.hover))
@@ -1998,6 +2033,11 @@ export default class Hub extends View {
           id: "edit-case", label: "Edit this case", actionIcon: "settings", iconColor: t.muted,
           onClick: () => { pendingCaseEdit = { tab: menu.tab, situation: menu.situation }; close(); run("hub.edit-case"); },
         });
+        // A panel command (`hub.oncall-triage`), for a menu that is not a row's.
+        case "command": return this.menuRow({
+          id: `command-${item.id}`, label: item.label, actionIcon: item.icon, iconColor: t.muted,
+          onClick: () => { close(); run(item.command); },
+        });
         default: {
           /** @type {never} */
           const unknownItem = item;
@@ -2253,6 +2293,7 @@ export default class Hub extends View {
     if (this.caseEditorDialog) return this.caseEditorDialog.render();
     if (this.rowDetailsDialog) return this.rowDetailsDialog.render();
     if (this.oncallTextDialog) return this.oncallTextDialog.render();
+    if (this.oncallTriageDialog) return this.oncallTriageDialog.render();
     if (this.filterSavePopup) return this.filterSavePopup.render();
     if (this.reportView) return this.reportView.render();
     if (this.isMenu) return this.menuView();

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getRowAction, getRowMenu, getPullRequestFacts, getRowDetails, getCaseRunPlace, getNewlyBlocked, getOncallRowAction, getOncallRowMenu, getDecisionFacts, getPullRequestLinks, getRowActions, matchCaseRule, getRuleReason, getPullRequestRuleFacts, getIssueRuleFacts } from "../mods/hub/row-action.js";
+import { getRowAction, getRowMenu, getPullRequestFacts, getFactParts, getFactSegments, formatClock, getRowDetails, getCaseRunPlace, getNewlyBlocked, getOncallRowAction, getOncallRowMenu, getDecisionFacts, getPullRequestLinks, getRowActions, matchCaseRule, getRuleReason, getPullRequestRuleFacts, getIssueRuleFacts } from "../mods/hub/row-action.js";
 import { getSettings, moveCaseEntry, addCaseRule, isLinkEntry, AFTER_DONE_NOTHING, OPEN_ENTRY, CHECKS_ENTRY, CONFLICTS_ENTRY, NUDGE_ENTRY } from "../mods/hub/settings.js";
 
 const githubLink = { label: "Open in GitHub", icon: "github" };
@@ -111,17 +111,17 @@ const NOW = Date.parse("2026-11-25T12:00:00Z");
 const MINUTE = 60_000;
 const agentOn = ({ status, since = null }) => action({ skill: "gh44-address-review", now: NOW, agent: { status, tabName: "#15 address-review", since } });
 
-test("a working agent: amber status with how long it has worked, and a quiet button to its tab", () => {
+test("a working agent: the button says working, with how long, and goes to its tab", () => {
   const main = agentOn({ status: "working", since: NOW - 12 * MINUTE });
-  assert.deepEqual(main.status, { tone: "working", text: "● working", elapsed: "12m" });
+  assert.deepEqual(main.status, { tone: "working", text: "working", elapsed: "12m" });
   assert.equal(main.kind, "agent");
-  assert.equal(main.label, "open tab");
+  assert.equal(main.label, "working");
   assert.equal(main.style, "quiet");
 });
 
 test("an agent that needs you: red status and an alert button to answer it", () => {
   const main = agentOn({ status: "blocked", since: NOW - 2 * 60 * MINUTE });
-  assert.deepEqual(main.status, { tone: "blocked", text: "! needs you", elapsed: "2h" });
+  assert.deepEqual(main.status, { tone: "blocked", text: "needs you", elapsed: "2h" });
   assert.equal(main.kind, "agent");
   assert.equal(main.label, "answer");
   assert.equal(main.style, "alert");
@@ -134,9 +134,9 @@ test("an idle agent: a quiet status and a quiet button to its tab", () => {
   assert.equal(main.style, "quiet");
 });
 
-test("a done agent: ✓ done, and the button is the case's main action again", () => {
+test("a done agent: done, and the button is the case's main action again", () => {
   const main = agentOn({ status: "done", since: NOW - MINUTE });
-  assert.deepEqual(main.status, { tone: "done", text: "✓ done", elapsed: null });
+  assert.deepEqual(main.status, { tone: "done", text: "done", elapsed: null });
   assert.equal(main.kind, "skill");
   assert.equal(main.label, "address-review");
   assert.equal(main.style, "suggested");
@@ -243,6 +243,7 @@ test("details: a PR's status is its merge state, checks, review decision, size a
     ["Branch", "install-no-sudo", null],
   ]);
   assert.equal(d.status.find((r) => r.label === "Branch").isMono, true);
+  assert.deepEqual(d.status.find((r) => r.label === "Size").parts, [{ text: "+44", tone: "success" }, { text: "−6", tone: "danger" }]);
   const clean = details({ row: prRow({ ci: "passing", decision: "APPROVED" }) });
   assert.equal(clean.owner, "someone else's PR");
   assert.deepEqual(clean.status.slice(0, 3).map((r) => [r.value, r.tone]), [["no conflicts", "success"], ["passing", "success"], ["approved", "success"]]);
@@ -265,6 +266,13 @@ test("details: a ticket's status is its state, priority, project, assignee, PR a
   assert.equal(bare.owner, null);
 });
 
+test("details: a ticket's state, priority and a missing assignee in their tones", () => {
+  const tones = (issue) => details({ row: { kind: "issue", issue: ticket(issue) } }).status.filter((r) => ["State", "Priority", "Assignee"].includes(r.label)).map((r) => r.tone);
+  assert.deepEqual(tones({}), ["warning", "warning", null]);
+  assert.deepEqual(tones({ stateType: "completed", priority: 1, assignee: null }), ["success", "danger", "dim"]);
+  assert.deepEqual(tones({ stateType: "unstarted", priority: 3 }), [null, null, null]);
+});
+
 test("details: a ticket's skill gives its Linear stage as the reason", () => {
   const menu = suggestedMenu([["gh44-implement", "i"], ["gh44-plan", "p"]]);
   const d = details({ row: { kind: "issue", issue: ticket({}) }, menu });
@@ -277,7 +285,7 @@ test("details: the agent on the row and its worktree, or no Agent section when n
   const agent = { status: "working", tabName: "#19 address-review", since: NOW - 12 * MINUTE };
   const d = details({ row: prRow({ author: "me" }), agent, worktree: "/repo/.worktrees/install-no-sudo", repoMain: "/repo" });
   assert.deepEqual(d.agent.map((r) => [r.label, r.value, r.tone]), [
-    ["Status", "● working 12m", "working"], ["Tab", "#19 address-review", null], ["Worktree", ".worktrees/install-no-sudo", null],
+    ["Status", "working 12m", "working"], ["Tab", "#19 address-review", null], ["Worktree", ".worktrees/install-no-sudo", null],
   ]);
   const elsewhere = details({ row: prRow({ author: "me" }), worktree: "/elsewhere/thu-1", repoMain: "/repo" });
   assert.deepEqual(elsewhere.agent.map((r) => [r.label, r.value]), [["Worktree", "/elsewhere/thu-1"]]);
@@ -383,8 +391,8 @@ test("an agent on the issue: answer it, go to its tab, or once done the case's a
   const blocked = oncallAction({ skill: "gh44-debug", agent: { status: "blocked", tabName: "WEB-1 debug", since: NOW - 4 * MINUTE } });
   assert.equal(blocked.kind, "agent");
   assert.equal(blocked.style, "alert");
-  assert.deepEqual(blocked.status, { tone: "blocked", text: "! needs you", elapsed: "4m" });
-  assert.equal(oncallAction({ agent: { status: "working", tabName: "WEB-1 debug", since: null } }).label, "open tab");
+  assert.deepEqual(blocked.status, { tone: "blocked", text: "needs you", elapsed: "4m" });
+  assert.equal(oncallAction({ agent: { status: "working", tabName: "WEB-1 debug", since: null } }).label, "working");
   const done = { status: "done", tabName: "WEB-1 debug", since: null };
   assert.equal(oncallAction({ skill: "gh44-debug", agent: done }).kind, "skill");
   assert.equal(oncallAction({ skill: "gh44-debug", agent: done, afterDone: "ask" }).label, "ask");
@@ -424,21 +432,53 @@ const decision = (params) => ({
   sessionId: "s1", reportPath: "/r.md", cwd: null, costUsd: 0.12, isNotified: true, ...params,
 });
 
-test("an On-call row's meta: new, project, a regression, events and users, and how long ago it was decided", () => {
-  assert.deepEqual(getDecisionFacts({ decision: decision({}), isUnseen: true, now: NOW }), ["new", "web", "40 events · 12 users", "2h"]);
+// The clock in local time, as the runtime's timezone shows it.
+/** @param {number} at */
+const localTime = (at) => `${String(new Date(at).getHours()).padStart(2, "0")}:${String(new Date(at).getMinutes()).padStart(2, "0")}`;
+const TWO_HOURS_AGO = NOW - 2 * 60 * MINUTE;
+
+test("an On-call row's meta: new, when it was decided, project, a regression, events and users", () => {
+  const decided = `${localTime(TWO_HOURS_AGO)} (2h ago)`;
+  assert.deepEqual(getDecisionFacts({ decision: decision({}), isUnseen: true, now: NOW }), ["new", decided, "web", "40 events · 12 users"]);
   assert.deepEqual(getDecisionFacts({ decision: decision({ kind: "regressed", project: "", decidedAt: "x" }), isUnseen: false, now: NOW }), ["regressed", "40 events · 12 users"]);
-  assert.deepEqual(getDecisionFacts({ decision: decision({ count: 1, userCount: 0 }), isUnseen: false, now: NOW }), ["web", "1 event", "2h"]);
+  assert.deepEqual(getDecisionFacts({ decision: decision({ count: 1, userCount: 0 }), isUnseen: false, now: NOW }), [decided, "web", "1 event"]);
 });
 
-test("details of an On-call row: severity, owner, cause, project, counts, who decided and the rule it matched", () => {
+test("a clock time: the time alone today, with the month and day before", () => {
+  const now = new Date(2026, 10, 25, 15, 4).getTime();
+  assert.equal(formatClock({ at: new Date(2026, 10, 25, 9, 7).getTime(), now }), "09:07");
+  assert.equal(formatClock({ at: new Date(2026, 10, 24, 23, 59).getTime(), now }), "Nov 24 23:59");
+});
+
+test("a meta fact's parts: a diff in green and red, a known status in its tone, anything else plain", () => {
+  assert.deepEqual(getFactParts("+44 −6"), [{ text: "+44", tone: "success" }, { text: "−6", tone: "danger" }]);
+  assert.deepEqual(getFactParts("checks failing"), [{ text: "checks failing", tone: "danger" }]);
+  assert.deepEqual(getFactParts("checks running"), [{ text: "checks running", tone: "warning" }]);
+  assert.deepEqual(getFactParts("approved"), [{ text: "approved", tone: "success" }]);
+  assert.deepEqual(getFactParts("ana"), [{ text: "ana", tone: null }]);
+});
+
+test("a meta line's runs: plain facts side by side join, a colored one stands alone", () => {
+  assert.deepEqual(getFactSegments(["checks failing", "ana", "2h", "+44 −6"]), [
+    { kind: "colored", parts: [{ text: "checks failing", tone: "danger" }] },
+    { kind: "plain", text: "ana · 2h" },
+    { kind: "colored", parts: [{ text: "+44", tone: "success" }, { text: "−6", tone: "danger" }] },
+  ]);
+  assert.deepEqual(getFactSegments([]), []);
+});
+
+test("details of an On-call row: severity, owner, cause, project, counts, when, who decided and the rule it matched", () => {
   const d = details({ row: { kind: "decision", decision: decision({}) }, menu: suggestedMenu([["gh44-debug", "d"]]) });
   assert.equal(d.owner, null);
   assert.deepEqual(d.status.map((r) => [r.label, r.value, r.tone]), [
-    ["Severity", "high", "warning"], ["Owner", "my team", null], ["Cause", "useJob reads a missing job", null], ["Project", "web", null],
-    ["Events", "40", null], ["Users", "12", null], ["Decided by", "AI", null], ["Rule", "A crash in code my team owns", null],
+    ["Severity", "high", "warning"], ["Owner", "my team", "warning"], ["Cause", "useJob reads a missing job", null], ["Project", "web", null],
+    ["Events", "40", null], ["Users", "12", null], ["Decided", localTime(TWO_HOURS_AGO), null], ["Last seen", "1h ago", null],
+    ["Decided by", "AI", null], ["Rule", "A crash in code my team owns", null],
   ]);
-  const filtered = details({ row: { kind: "decision", decision: decision({ stage: "priority", outcome: "ignored", severity: null, owner: null, matchedRule: null, project: "" }) } });
-  assert.deepEqual(filtered.status.map((r) => r.label), ["Cause", "Events", "Users", "Decided by"]);
+  const filtered = details({ row: { kind: "decision", decision: decision({ stage: "priority", outcome: "ignored", severity: null, owner: null, matchedRule: null, project: "", lastSeen: "" }) } });
+  assert.deepEqual(filtered.status.map((r) => r.label), ["Cause", "Events", "Users", "Decided", "Decided by"]);
+  const failed = details({ row: { kind: "decision", decision: decision({ stage: "failed", outcome: "failed" }) } });
+  assert.equal(failed.status.find((r) => r.label === "Decided by").tone, "danger");
 });
 
 test("details of an On-call row: a skill of its case gives the case as its reason", () => {
