@@ -12,14 +12,31 @@
 /** @typedef {{ name: string, key: string | null, repo?: string }} Skill */
 // The focused repo: its name and the skills in its .claude folder. skills null: not listed yet.
 /** @typedef {{ name: string | null, skills: string[] | null }} RepoSkills */
+// Where a case's skills run: "default" follows Where runs go (GitHub: a background tab).
+/** @typedef {"default" | "worktree" | "here" | "background"} CaseWhere */
+// What a row suggests once its agent is done: null, the case's main action; a skill; or AFTER_DONE_NOTHING.
+/** @typedef {string | null} AfterDone */
+/** @typedef {{ where: CaseWhere, afterDone: AfterDone }} CaseRun */
+// A case rule: when a row of the case fits it, its action is the row's main one. check: a failing
+// check's name holds the value; label, author: equal to it; size: more lines changed than it; priority: a
+// Linear priority (its number).
+/** @typedef {"check" | "label" | "author" | "size" | "priority"} RuleKind */
+/** @typedef {{ id: string, when: { kind: RuleKind, value: string }, then: string }} CaseRule */
 // A case's actions in its order, OPEN_ENTRY among them, and the ones its menu hides. The first
 // one not hidden is the default the row's main button runs; OPEN_ENTRY there: it opens the PR or ticket.
-/** @typedef {{ order: string[], hidden: string[] }} CaseSettings */
+// rules: in order; the first that fits a row picks its main action instead.
+/** @typedef {{ order: string[], hidden: string[], rules: CaseRule[] } & CaseRun} CaseSettings */
 /** @typedef {{ list: Skill[], cases: Partial<Record<Situation, CaseSettings>> }} TabSkills */
 /** @typedef {Record<Tab, TabSkills>} Skills */
 /** @typedef {"ask" | "worktree" | "here"} WhereToRun */
 /** @typedef {"review" | "work" | "ask" | "other"} SkillRole */
-/** @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowOncall: boolean, shouldShowKeyHints: boolean, shouldShowFilterChips: boolean, whereToRun: WhereToRun, skills: Skills }} Settings */
+// What clicking a row does: open its details, or only select it.
+/** @typedef {"details" | "select"} RowClick */
+// startCollapsed: list group ids ("pr-draft", "ln-Todo") that start collapsed when the panel loads.
+/**
+ * @typedef {{ shouldShowGithub: boolean, shouldShowLinear: boolean, shouldShowOncall: boolean, shouldShowFilterChips: boolean, whereToRun: WhereToRun,
+ *   rowClick: RowClick, shouldNotifyBlocked: boolean, startCollapsed: string[], shouldMoveToInProgress: boolean, skills: Skills }} Settings
+ */
 /** @typedef {Tab} PanelTab */
 
 // Ask: a built-in action, not a skill. Claude reads the PR or ticket and waits for questions.
@@ -35,16 +52,50 @@ const CONTINUE_ENTRY = { name: CONTINUE_ACTION, key: CONTINUE_KEY };
 const BUILT_IN_ACTIONS = [ASK_ACTION, CONTINUE_ACTION];
 // In a case's order: the main button opens the PR or ticket. Not a valid skill name, so no skill clashes.
 export const OPEN_ENTRY = "(open)";
+// A case's after done: suggest nothing, the done agent's tab stays on the button. Not a valid skill name.
+export const AFTER_DONE_NOTHING = "(nothing)";
+// A PR row's link actions, entries a GitHub tab's list and cases hold beside skills: open its
+// checks, its conflicting files, or ask its pending reviewers again. Not valid skill names either.
+export const CHECKS_ENTRY = "(checks)";
+export const CONFLICTS_ENTRY = "(conflicts)";
+export const NUDGE_ENTRY = "(nudge)";
+/** @typedef {"open" | "checks" | "conflicts" | "nudge"} LinkEntryId */
+/** @type {{ id: LinkEntryId, name: string, label: string, short: string, icon: string }[]} */
+export const LINK_ENTRIES = [
+  { id: "open", name: OPEN_ENTRY, label: "Open in GitHub", short: "GitHub", icon: "github" },
+  { id: "checks", name: CHECKS_ENTRY, label: "Open checks", short: "checks", icon: "link" },
+  { id: "conflicts", name: CONFLICTS_ENTRY, label: "Open conflicting files", short: "conflicts", icon: "link" },
+  { id: "nudge", name: NUDGE_ENTRY, label: "Nudge reviewers", short: "nudge", icon: "link" },
+];
+// The link entries a GitHub tab's list can add; Open is in every case already.
+const ADDABLE_LINKS = LINK_ENTRIES.filter((e) => e.name !== OPEN_ENTRY).map((e) => e.name);
 
-/** @type {Record<Tab, { list: Skill[], defaults: Partial<Record<Situation, string>> }>} */
+/** @param {string} name */
+export const isLinkEntry = (name) => ADDABLE_LINKS.includes(name);
+/** @param {string} name */
+export const getLinkEntry = (name) => LINK_ENTRIES.find((e) => e.name === name) ?? null;
+/** @type {CaseWhere[]} */
+const CASE_WHERES = ["default", "worktree", "here", "background"];
+/** @type {CaseRun} */
+const DEFAULT_CASE_RUN = { where: "default", afterDone: null };
+// The rules each tab's rows can be told apart by. On-call rows have none of these facts.
+/** @type {Record<Tab, RuleKind[]>} */
+export const RULE_KINDS = { github: ["check", "label", "author", "size"], linear: ["label", "priority"], oncall: [] };
+
+// links: the link entries a case offers right after its default; every other case hides them.
+/** @type {Record<Tab, { list: Skill[], defaults: Partial<Record<Situation, string>>, links?: Partial<Record<Situation, string[]>> }>} */
 const BUILT_IN_SKILLS = {
   github: {
     list: [
       { name: "gh44-code-review", key: "r" },
       { name: "gh44-address-review", key: "a" },
       { name: "gh44-resolve-conflicts", key: "c" },
+      { name: CHECKS_ENTRY, key: null },
+      { name: CONFLICTS_ENTRY, key: "f" },
+      { name: NUDGE_ENTRY, key: "n" },
       ASK_ENTRY,
     ],
+    links: { myChecksFailing: [CHECKS_ENTRY], myConflicts: [CONFLICTS_ENTRY], myPullRequest: [NUDGE_ENTRY] },
     defaults: {
       myConflicts: "gh44-resolve-conflicts",
       myChecksFailing: "gh44-address-review",
@@ -111,26 +162,36 @@ export const ONCALL_SITUATIONS = [
 ];
 const SITUATIONS = { github: GITHUB_SITUATIONS, linear: LINEAR_SITUATIONS, oncall: ONCALL_SITUATIONS };
 
-// A case from one default (a skill, or none): it goes first and shows; the rest follow in the
-// list's order, and with no default OPEN_ENTRY goes first. Also reads cases saved before order.
-/** @param {{ skill: unknown, hidden: string[], names: string[] }} params @returns {CaseSettings} */
-const toCase = ({ skill, hidden, names }) => {
+// A case from one default (a skill, or none): it goes first and shows, then its links; the rest
+// follow in the list's order, and with no default OPEN_ENTRY goes first. Link entries other than
+// its links are hidden. Also reads cases saved before order.
+/** @param {{ skill: unknown, hidden: string[], names: string[], links?: string[] }} params @returns {CaseSettings} */
+const toCase = ({ skill, hidden, names, links = [] }) => {
   const isSkill = typeof skill === "string" && skill !== "" && names.includes(skill);
-  const others = names.filter((name) => name !== skill);
+  const caseLinks = links.filter((name) => names.includes(name));
+  const others = names.filter((name) => name !== skill && !caseLinks.includes(name));
+  const otherLinks = others.filter(isLinkEntry);
   return {
-    order: isSkill ? [String(skill), ...others, OPEN_ENTRY] : [OPEN_ENTRY, ...others],
-    hidden: hidden.filter((name) => name !== skill),
+    order: isSkill ? [String(skill), ...caseLinks, ...others, OPEN_ENTRY] : [OPEN_ENTRY, ...caseLinks, ...others],
+    hidden: [...new Set([...hidden.filter((name) => name !== skill), ...otherLinks])],
+    rules: [],
+    ...DEFAULT_CASE_RUN,
   };
 };
 
-// A case fitted to the tab's list: entries not in it dropped, new skills added at the end,
-// OPEN_ENTRY always in the order and never hidden.
+// A case fitted to the tab's list: entries not in it dropped, new skills added at the end (a new
+// link entry hidden), OPEN_ENTRY always in the order and never hidden. An after done skill gone
+// from the list: the default; a rule whose action left it: dropped.
 /** @param {{ c: CaseSettings, names: string[] }} params @returns {CaseSettings} */
 const fitCase = ({ c, names }) => {
   const isKnown = (/** @type {string} */ name) => name === OPEN_ENTRY || names.includes(name);
   const kept = [...new Set(c.order.filter(isKnown))];
   const missing = [...names, OPEN_ENTRY].filter((name) => !kept.includes(name));
-  return { order: [...kept, ...missing], hidden: [...new Set(c.hidden.filter((name) => names.includes(name)))] };
+  const isAfterDoneKnown = c.afterDone === AFTER_DONE_NOTHING || (c.afterDone !== null && names.includes(c.afterDone));
+  return {
+    order: [...kept, ...missing], hidden: [...new Set([...c.hidden.filter((name) => names.includes(name)), ...missing.filter(isLinkEntry)])],
+    rules: c.rules.filter((rule) => names.includes(rule.then)), where: c.where, afterDone: isAfterDoneKnown ? c.afterDone : null,
+  };
 };
 
 // Every case of a tab fitted to its list, a missing case built with no default.
@@ -157,19 +218,23 @@ const keepSkills = ({ tabSkills, list, tab }) => {
 };
 
 // Every case of a tab, each with its default from defaults (when it has one) and nothing hidden.
-/** @param {{ tab: Tab, defaults: Partial<Record<string, unknown>>, names: string[] }} params @returns {TabSkills["cases"]} */
-const toCases = ({ tab, defaults, names }) => Object.fromEntries(SITUATIONS[tab].map((sit) => [sit.id, toCase({ skill: defaults[sit.id], hidden: [], names })]));
+/** @param {{ tab: Tab, defaults: Partial<Record<string, unknown>>, names: string[], links?: Partial<Record<string, string[]>> }} params @returns {TabSkills["cases"]} */
+const toCases = ({ tab, defaults, names, links = {} }) => Object.fromEntries(SITUATIONS[tab].map((sit) => [
+  sit.id, toCase({ skill: defaults[sit.id], hidden: [], names, links: links[sit.id] ?? [] }),
+]));
 
 /** @param {Tab} tab @returns {TabSkills} */
 const builtInTab = (tab) => {
-  const { list, defaults } = BUILT_IN_SKILLS[tab];
-  return { list, cases: toCases({ tab, defaults, names: list.map((e) => e.name) }) };
+  const { list, defaults, links } = BUILT_IN_SKILLS[tab];
+  return { list, cases: toCases({ tab, defaults, names: list.map((e) => e.name), links }) };
 };
 
 /** @type {Record<Tab, TabSkills>} */
 const DEFAULT_SKILLS = { github: builtInTab("github"), linear: builtInTab("linear"), oncall: builtInTab("oncall") };
 /** @type {WhereToRun[]} */
 const WHERE_TO_RUN = ["ask", "worktree", "here"];
+/** @type {RowClick[]} */
+const ROW_CLICKS = ["details", "select"];
 // Taken by the panel itself: j/k move, o opens.
 const RESERVED_KEYS = ["j", "k", "o"];
 const KEY_LETTER = /^[a-z]$/;
@@ -178,6 +243,9 @@ const SKILL_NAME = /^[\w:.-]+$/;
 
 /** @param {string} name */
 export const isValidSkillName = (name) => SKILL_NAME.test(name);
+// A name a tab's list can hold: a skill, or on GitHub a link entry.
+/** @param {{ name: string, tab: Tab }} params */
+const isListName = ({ name, tab }) => isValidSkillName(name) || (tab === "github" && isLinkEntry(name));
 
 /** @param {unknown} value @returns {Record<string, any>} */
 const toRecord = (value) => (value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {});
@@ -197,6 +265,24 @@ const splitLegacyDefaults = (defaults) => Object.fromEntries(Object.entries(defa
 /** @param {unknown} value @returns {string[]} */
 const toNames = (value) => (Array.isArray(value) ? value.filter((name) => typeof name === "string") : []);
 
+// A size rule's value: a whole number of changed lines above 0.
+const SIZE_VALUE = /^[1-9]\d*$/;
+
+// A rule as saved, or null when it is not one this tab's rows can use.
+/** @param {{ value: unknown, tab: Tab }} params @returns {CaseRule | null} */
+const toRule = ({ value, tab }) => {
+  const r = toRecord(value);
+  const when = toRecord(r.when);
+  const kind = RULE_KINDS[tab].find((k) => k === when.kind);
+  const text = typeof when.value === "string" ? when.value.trim() : "";
+  const isValue = kind === "size" ? SIZE_VALUE.test(text) : text !== "";
+  if (!kind || !isValue || typeof r.id !== "string" || typeof r.then !== "string") return null;
+  return { id: r.id, when: { kind, value: text }, then: r.then };
+};
+
+/** @param {{ value: unknown, tab: Tab }} params @returns {CaseRule[]} */
+const toRules = ({ value, tab }) => (Array.isArray(value) ? value.map((rule) => toRule({ value: rule, tab })).filter((rule) => rule !== null) : []);
+
 // A saved tab's cases: with their order, or from the one default saved before order, or from
 // the defaults saved before cases.
 /** @param {{ saved: Record<string, any>, tab: Tab, names: string[] }} params @returns {TabSkills["cases"]} */
@@ -206,7 +292,9 @@ function readSavedCases({ saved, tab, names }) {
   return Object.fromEntries(SITUATIONS[tab].map((sit) => {
     const c = toRecord(cases[sit.id]);
     const hidden = toNames(c.hidden);
-    return [sit.id, Array.isArray(c.order) ? { order: toNames(c.order), hidden } : toCase({ skill: c.default, hidden, names })];
+    const run = { where: CASE_WHERES.find((w) => w === c.where) ?? "default", afterDone: typeof c.afterDone === "string" ? c.afterDone : null };
+    const order = Array.isArray(c.order) ? { order: toNames(c.order), hidden } : toCase({ skill: c.default, hidden, names });
+    return [sit.id, { ...order, rules: toRules({ value: c.rules, tab }), ...run }];
   }));
 }
 
@@ -224,7 +312,7 @@ const withAsk = (list) => withBuiltIn({ list, name: ASK_ACTION, key: ASK_KEY });
 function readTabSkills({ saved, tab }) {
   const s = toRecord(saved);
   if (!Array.isArray(s.list)) return null;
-  const read = withAsk(s.list.map(toRecord).filter((e) => typeof e.name === "string" && isValidSkillName(e.name))
+  const read = withAsk(s.list.map(toRecord).filter((e) => typeof e.name === "string" && isListName({ name: e.name, tab }))
     .map((e) => ({
       name: String(e.name), key: typeof e.key === "string" && KEY_LETTER.test(e.key) ? e.key : null,
       ...(typeof e.repo === "string" && e.repo ? { repo: e.repo } : {}),
@@ -256,8 +344,11 @@ export function getSettings({ saved, installedSkills = null }) {
     shouldShowLinear,
     shouldShowOncall: s.shouldShowOncall !== false,
     whereToRun: WHERE_TO_RUN.find((w) => w === s.whereToRun) ?? "ask",
-    shouldShowKeyHints: s.shouldShowKeyHints !== false,
+    rowClick: ROW_CLICKS.find((c) => c === s.rowClick) ?? "details",
     shouldShowFilterChips: s.shouldShowFilterChips !== false,
+    shouldNotifyBlocked: s.shouldNotifyBlocked !== false,
+    startCollapsed: toNames(s.startCollapsed),
+    shouldMoveToInProgress: s.shouldMoveToInProgress !== false,
     skills: {
       github: readTabSkills({ saved: skills.github, tab: "github" }) ?? getDefaultTabSkills({ tab: "github", installedSkills }),
       linear: readTabSkills({ saved: skills.linear, tab: "linear" }) ?? getDefaultTabSkills({ tab: "linear", installedSkills }),
@@ -294,7 +385,7 @@ const withTab = ({ skills, tab, tabSkills }) => ({ ...skills, [tab]: tabSkills }
 export function addSkill({ skills, tab, skill, repo = null }) {
   const name = skill.trim();
   const current = skills[tab];
-  if (!isValidSkillName(name) || current.list.some((e) => e.name === name)) return skills;
+  if (!isListName({ name, tab }) || current.list.some((e) => e.name === name)) return skills;
   return withTab({ skills, tab, tabSkills: fitCases({ tabSkills: { ...current, list: [...current.list, { name, key: null, ...(repo ? { repo } : {}) }] }, tab }) });
 }
 
@@ -357,6 +448,69 @@ export function setCaseHidden({ skills, tab, situation, skill, isHidden }) {
   });
 }
 
+// The case's run, or the default one for a case the tab lacks.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params @returns {CaseRun} */
+export function getCaseRun({ skills, tab, situation }) {
+  const c = skills[tab].cases[situation];
+  return c ? { where: c.where, afterDone: c.afterDone } : DEFAULT_CASE_RUN;
+}
+
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, run: CaseRun }} params @returns {Skills} */
+export const setCaseRun = ({ skills, tab, situation, run }) => withCase({ skills, tab, situation, update: (c) => ({ ...c, ...run }) });
+
+// The case as built in: its default first, everything shown, the default run. Only the tab's
+// current skills, so a skill removed from the tab stays removed.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params @returns {Skills} */
+export function resetCase({ skills, tab, situation }) {
+  const names = skills[tab].list.map((e) => e.name);
+  const builtIn = toCase({ skill: BUILT_IN_SKILLS[tab].defaults[situation], hidden: [], names, links: BUILT_IN_SKILLS[tab].links?.[situation] ?? [] });
+  return withCase({ skills, tab, situation, update: () => fitCase({ c: builtIn, names }) });
+}
+
+// A skill for one case: a new one joins the tab hidden in its other cases; one the tab has shows in this case.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, skill: string, repo?: string | null }} params @returns {Skills} */
+export function addCaseSkill({ skills, tab, situation, skill, repo = null }) {
+  const name = skill.trim();
+  if (skills[tab].list.some((e) => e.name === name)) return setCaseHidden({ skills, tab, situation, skill: name, isHidden: false });
+  const added = addSkill({ skills, tab, skill: name, repo });
+  if (added === skills) return skills;
+  return SITUATIONS[tab].reduce((next, sit) => setCaseHidden({ skills: next, tab, situation: sit.id, skill: name, isHidden: sit.id !== situation }), added);
+}
+
+const ID_RADIX = 36;
+const ID_RANDOM_LENGTH = 6;
+// A rule's id: unique, never one a removed rule had, so nothing keyed by it (its action select) carries over.
+const newRuleId = () => `rule-${Date.now().toString(ID_RADIX)}-${Math.random().toString(ID_RADIX).slice(2, 2 + ID_RANDOM_LENGTH)}`;
+
+// A rule for a case, last in its order. Refused: a kind its tab has not, an empty value (a size
+// not a number above 0), or an action the tab has not.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, when: CaseRule["when"], then: string }} params @returns {Skills} */
+export function addCaseRule({ skills, tab, situation, when, then }) {
+  const id = newRuleId();
+  const rule = toRule({ value: { id, when, then }, tab });
+  if (!rule || !skills[tab].list.some((e) => e.name === then)) return skills;
+  return withCase({ skills, tab, situation, update: (c) => ({ ...c, rules: [...c.rules, rule] }) });
+}
+
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, id: string }} params @returns {Skills} */
+export const removeCaseRule = ({ skills, tab, situation, id }) => withCase({ skills, tab, situation, update: (c) => ({ ...c, rules: c.rules.filter((r) => r.id !== id) }) });
+
+/** @param {{ skills: Skills, tab: Tab, situation: Situation, id: string, then: string }} params @returns {Skills} */
+export function setCaseRuleAction({ skills, tab, situation, id, then }) {
+  if (!skills[tab].list.some((e) => e.name === then)) return skills;
+  return withCase({ skills, tab, situation, update: (c) => ({ ...c, rules: c.rules.map((r) => (r.id === id ? { ...r, then } : r)) }) });
+}
+
+// The collapsed groups once the panel loads: the ones left collapsed, plus those set to start collapsed.
+/** @param {{ collapsed: unknown, startCollapsed: string[] }} params @returns {string[]} */
+export const withStartCollapsed = ({ collapsed, startCollapsed }) => [...new Set([...toNames(collapsed), ...startCollapsed])];
+
+// Starting work on a ticket that is not started yet moves it to In Progress, while the setting is on.
+const NOT_STARTED_STAGES = ["backlog", "todo"];
+
+/** @param {{ isOn: boolean, role: SkillRole, issue: { stateType: string, state: string } | null | undefined }} params */
+export const shouldMoveIssue = ({ isOn, role, issue }) => isOn && role === "work" && Boolean(issue) && NOT_STARTED_STAGES.includes(getIssueStage(issue));
+
 // Where a ticket is: backlog, todo, progress or review (a started state named like "In Review").
 /** @param {{ stateType: string, state: string }} issue @returns {"backlog" | "todo" | "progress" | "review"} */
 export function getIssueStage(issue) {
@@ -415,13 +569,53 @@ export function getDefaultSkill({ skills, tab, situation }) {
 /** @type {LinearSituation[]} */
 const WORK_SITUATIONS = ["backlog", "todo", "inProgress", "inProgressWithPullRequest"];
 
-// Review skills belong to the skill, not to today's default: a skill saved or built in as the
-// review default of one side keeps that side when the default changes. Ask is never one.
+// A case's skills that belong to it: today's default and the built-in one, so a skill keeps its
+// case when the default changes.
+/** @param {{ skills: Skills, tab: Tab, situation: Situation }} params @returns {string[]} */
+export const getSituationSkills = ({ skills, tab, situation }) => [getDefaultSkill({ skills, tab, situation }), BUILT_IN_SKILLS[tab].defaults[situation]]
+  .filter((name) => typeof name === "string");
+
 /** @param {{ skills: Skills, situation: "reviewMine" | "reviewOthers" }} params */
 const isReviewSkillOf = ({ skills, situation }) => {
-  const names = [getDefaultSkill({ skills, tab: "linear", situation }), BUILT_IN_SKILLS.linear.defaults[situation]];
+  const names = getSituationSkills({ skills, tab: "linear", situation });
   /** @param {string} skill */
   return (skill) => skill !== ASK_ACTION && names.includes(skill);
+};
+
+// Whose PR a row is about. none: a ticket without one.
+/** @typedef {"mine" | "others" | "none"} PullRequestOwner */
+/** @typedef {{ mine: string[], others: string[] }} ReviewSkills */
+
+// The review skills of a tab's PRs: mine (address-review) and someone else's (code-review). Ask is never one.
+/** @param {{ skills: Skills, tab: Tab }} params @returns {ReviewSkills} */
+export function getReviewSkills({ skills, tab }) {
+  /** @param {Situation} situation */
+  const of = (situation) => getSituationSkills({ skills, tab, situation }).filter((name) => name !== ASK_ACTION);
+  switch (tab) {
+    case "github": return { mine: of("myPullRequest"), others: of("othersPullRequest") };
+    case "linear": return { mine: of("reviewMine"), others: of("reviewOthers") };
+    case "oncall": return { mine: [], others: [] };
+    default: {
+      /** @type {never} */
+      const unknownTab = tab;
+      return unknownTab;
+    }
+  }
+}
+
+// A review skill applies only to its side's PR; any other skill applies everywhere.
+/** @param {{ skill: string, reviewSkills: ReviewSkills, pullRequest: PullRequestOwner }} params */
+export function isSkillOffered({ skill, reviewSkills, pullRequest }) {
+  const isMine = reviewSkills.mine.includes(skill);
+  const isOthers = reviewSkills.others.includes(skill);
+  if (!isMine && !isOthers) return true;
+  return (isMine && pullRequest === "mine") || (isOthers && pullRequest === "others");
+}
+
+/** @param {{ isMyPullRequest: boolean, prUrl: string | null }} issue @returns {PullRequestOwner} */
+export const getTicketPullRequest = (issue) => {
+  if (issue.isMyPullRequest) return "mine";
+  return issue.prUrl ? "others" : "none";
 };
 
 // What a skill does. "review": gets the ticket's PR URL and never asks where to run.
@@ -447,23 +641,8 @@ export function getCaseActions({ skills, tab, situation }) {
   return c.order.filter((name) => name !== OPEN_ENTRY && !c.hidden.includes(name));
 }
 
-// A ticket's menu (and so its keys): its case's actions, with my-PR review skills only on my PR
-// and the others' ones only on someone else's PR.
-/** @param {{ skills: Skills, issue: { stateType: string, state: string, isMyPullRequest: boolean, prUrl: string | null } }} params */
-export function getTicketSkills({ skills, issue }) {
-  const isReviewMine = isReviewSkillOf({ skills, situation: "reviewMine" });
-  const isReviewOthers = isReviewSkillOf({ skills, situation: "reviewOthers" });
-  const isOthersPullRequest = !issue.isMyPullRequest && Boolean(issue.prUrl);
-  /** @param {string} skill */
-  const isOffered = (skill) => {
-    if (!isReviewMine(skill) && !isReviewOthers(skill)) return true;
-    return (isReviewMine(skill) && issue.isMyPullRequest) || (isReviewOthers(skill) && isOthersPullRequest);
-  };
-  return getCaseActions({ skills, tab: "linear", situation: getLinearSituation(issue) }).filter(isOffered);
-}
-
 // Keys on a selected row that start a skill directly: key letter -> skill. actions: the row's
-// menu, so a skill hidden there has no key either.
+// suggested skills; the menu's other skills have no key on the row.
 /** @param {{ skills: Skills, tab: Tab, actions: string[] }} params @returns {Record<string, string>} */
 export const getKeySkills = ({ skills, tab, actions }) => Object.fromEntries(skills[tab].list
   .filter((s) => s.key && actions.includes(s.name)).map((s) => [s.key, s.name]));
@@ -472,16 +651,10 @@ export const getKeySkills = ({ skills, tab, actions }) => Object.fromEntries(ski
 /** @param {string} skill */
 export const shortSkill = (skill) => skill.replace(/^gh44-/, "");
 
-/** @param {{ skills: Skills, tab: PanelTab }} params */
-export function getKeyHints({ skills, tab }) {
-  const keys = skills[tab].list.filter((s) => s.key).map((s) => `${s.key} ${shortSkill(s.name)}`);
-  return ["j/k move", "↵ run", ...keys, "o open", "/ search"].join(" · ");
-}
-
 /** @param {TabSkills} tab @returns {TabSkills} */
 const copyTab = (tab) => ({
   list: tab.list.map((e) => ({ ...e })),
-  cases: Object.fromEntries(Object.entries(tab.cases).map(([id, c]) => [id, { order: [...c.order], hidden: [...c.hidden] }])),
+  cases: Object.fromEntries(Object.entries(tab.cases).map(([id, c]) => [id, { ...c, order: [...c.order], hidden: [...c.hidden], rules: c.rules.map((r) => ({ ...r, when: { ...r.when } })) }])),
 });
 
 // The suggested setup: the gh44 skills from gh44-brain on both tabs, with their keys and defaults.
@@ -489,17 +662,24 @@ const copyTab = (tab) => ({
 /** @returns {Skills} */
 export const getGh44Setup = () => ({ github: copyTab(DEFAULT_SKILLS.github), linear: copyTab(DEFAULT_SKILLS.linear), oncall: copyTab(DEFAULT_SKILLS.oncall) });
 
+// Link entries leave the comparison, so a gh44 setup saved before them still reads as in use.
 /** @param {{ a: string[], b: string[] }} params */
-const isSameList = ({ a, b }) => a.length === b.length && a.every((name, i) => name === b[i]);
+const isSameList = ({ a, b }) => {
+  const [left, right] = [a.filter((name) => !isLinkEntry(name)), b.filter((name) => !isLinkEntry(name))];
+  return left.length === right.length && left.every((name, i) => name === right[i]);
+};
 
 /** @param {{ a?: CaseSettings, b?: CaseSettings }} params */
-const isSameCase = ({ a, b }) => isSameList({ a: a?.order ?? [], b: b?.order ?? [] }) && isSameList({ a: a?.hidden ?? [], b: b?.hidden ?? [] });
+const isSameCase = ({ a, b }) => isSameList({ a: a?.order ?? [], b: b?.order ?? [] }) && isSameList({ a: a?.hidden ?? [], b: b?.hidden ?? [] })
+  && a?.where === b?.where && a?.afterDone === b?.afterDone && JSON.stringify(a?.rules ?? []) === JSON.stringify(b?.rules ?? []);
 
 /** @param {{ a: TabSkills, b: TabSkills, tab: Tab }} params */
-const isSameTab = ({ a, b, tab }) =>
-  a.list.length === b.list.length
-  && a.list.every((e, i) => e.name === b.list[i].name && e.key === b.list[i].key)
-  && SITUATIONS[tab].every((sit) => isSameCase({ a: a.cases[sit.id], b: b.cases[sit.id] }));
+const isSameTab = ({ a, b, tab }) => {
+  const [left, right] = [a.list.filter((e) => !isLinkEntry(e.name)), b.list.filter((e) => !isLinkEntry(e.name))];
+  return left.length === right.length
+    && left.every((e, i) => e.name === right[i].name && e.key === right[i].key)
+    && SITUATIONS[tab].every((sit) => isSameCase({ a: a.cases[sit.id], b: b.cases[sit.id] }));
+};
 
 /** @param {{ skills: Skills }} params */
 export function isUsingGh44Setup({ skills }) {
@@ -511,21 +691,38 @@ export function isUsingGh44Setup({ skills }) {
 // How many of the skills (each counted once, across both tabs, Ask and repo skills aside) are installed.
 /** @param {{ skills: Skills, installedSkills: string[] }} params */
 export function countInstalledSkills({ skills, installedSkills }) {
-  const names = new Set([...skills.github.list, ...skills.linear.list, ...skills.oncall.list].filter((e) => !e.repo).map((e) => e.name).filter((name) => !BUILT_IN_ACTIONS.includes(name)));
+  const names = new Set([...skills.github.list, ...skills.linear.list, ...skills.oncall.list].filter((e) => !e.repo).map((e) => e.name).filter((name) => !BUILT_IN_ACTIONS.includes(name) && !isLinkEntry(name)));
   return { installed: [...names].filter((name) => installedSkills.includes(name)).length, total: names.size };
 }
 
 // A skill can run when it is in ~/.claude/skills, or a plugin skill ("plugin:skill") that is not
-// listed there. Ask is built in. null: not listed yet, all of them.
+// listed there. Ask and link entries are built in. null: not listed yet, all of them.
 /** @param {{ skill: string, installedSkills: string[] | null }} params */
 export const canRun = ({ skill, installedSkills }) =>
-  !installedSkills || BUILT_IN_ACTIONS.includes(skill) || skill.includes(":") || installedSkills.includes(skill);
+  !installedSkills || BUILT_IN_ACTIONS.includes(skill) || isLinkEntry(skill) || skill.includes(":") || installedSkills.includes(skill);
 
 // A repo skill runs only in its repo, while the repo's .claude has it. Any other entry: canRun.
 /** @param {{ entry: Skill, installedSkills: string[] | null, repo: RepoSkills | null }} params */
 export function canRunEntry({ entry, installedSkills, repo }) {
   if (!entry.repo) return canRun({ skill: entry.name, installedSkills });
   return entry.repo === repo?.name && (!repo.skills || repo.skills.includes(entry.name));
+}
+
+// An installed skill to add: not a repo's own.
+/** @param {string} name @returns {{ name: string, repo: string | null }} */
+const toInstalledCandidate = (name) => ({ name, repo: null });
+
+// Skills a tab can add: the focused repo's own, then the installed ones, without the tab's names
+// and only those holding the typed text.
+/**
+ * @param {{ names: string[], installedSkills: string[] | null, repo: RepoSkills, typed: string }} params
+ * @returns {{ name: string, repo: string | null }[]}
+ */
+export function getSkillCandidates({ names, installedSkills, repo, typed }) {
+  const text = typed.trim().toLowerCase();
+  const repoSkills = repo.name ? (repo.skills ?? []).map((name) => ({ name, repo: repo.name })) : [];
+  const installed = (installedSkills ?? []).filter((name) => !repo.skills?.includes(name)).map(toInstalledCandidate);
+  return [...repoSkills, ...installed].filter((c) => !names.includes(c.name) && c.name.toLowerCase().includes(text));
 }
 
 // "owner/name" -> "name", for the repo tag beside a repo skill.

@@ -26,6 +26,10 @@ Each check, every new, regressed or escalating issue goes through these steps. E
 
 Every issue stays in the list with who decided it and why. Open the report, re-run the triage, or start any of your skills on it from the row.
 
+## Triage by hand
+
+**Triage** beside Check now (or `herdr-app do hub.oncall-triage`) opens a dialog: paste any link (a Sentry issue, a Slack thread, a doc), add a note, and pick a skill. The skill starts in a new Claude tab in your code folder.
+
 ## Triage skill
 
 On-call ships its own skill, [`oncall-triage`](skills/oncall-triage/SKILL.md), and uses it by default. To use your own, pick any installed skill under ⚙ settings › On-call › Triage skill. Whatever the skill, On-call adds your domain, your rules and the answer format it needs.
@@ -39,6 +43,7 @@ On-call works with Sentry. It needs a personal token with `org:read`, `project:r
 | Path          | What                                                          |
 | ------------- | ------------------------------------------------------------- |
 | `view.js`     | The tab: list, filters, status line and row actions           |
+| `triage-dialog.js` | The Triage dialog: one issue by its link, with a skill   |
 | `settings.js` | The settings section and its setup steps                      |
 | `config.js`   | The saved setup, read safely by the panel and the service     |
 | `client.js`   | The panel's I/O: token, service start and stop, its files     |

@@ -9,7 +9,7 @@ import { PROVIDERS, getProvider, DEFAULT_PROVIDER } from "../mods/hub/oncall/pro
 import { toAlert, toAlerts, toOrgs, toProjects, buildIssuesPath, toEventContext } from "../mods/hub/oncall/providers/sentry-parse.mjs";
 import { selectWork, runFreeFilters, buildPrompt, buildDomainPrompt, parseVerdict, parseDomainVerdict, stripVerdict, stripFrontmatter, shouldNotify, toDecision, pruneDecisions } from "../mods/hub/oncall/service/triage.mjs";
 import { extractArrayPatterns, collectNoiseRules, cleanCodeowners, buildScanPrompt, formatRepoContext } from "../mods/hub/oncall/service/repo-scan.mjs";
-import { readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall/decisions.js";
+import { buildTriagePrompt, getTriageTabName, readDecisions, filterDecisions, getTodayStats, getNewNudges, seenKey, countUnseen, getDecidedBy, isRerunPending, getCountdownLeft, isCheckPending, splitReport } from "../mods/hub/oncall/decisions.js";
 
 const org = { slug: "acme", name: "Acme", apiUrl: "https://de.sentry.io" };
 const web = { id: "1", slug: "web" };
@@ -402,4 +402,16 @@ test("a report splits into markdown and diff blocks, an indented diff in a list 
   assert.equal(diff.lines[5].text, "   }");
   assert.deepEqual(splitReport("no code here"), [{ kind: "markdown", text: "no code here" }]);
   assert.deepEqual(splitReport("```diff\n+ a").map((p) => p.kind), ["markdown"]);
+});
+
+test("a triage by hand: the skill on the link, then the note; the built-in skill as its file", () => {
+  assert.equal(buildTriagePrompt({ skill: "gh44-debug", link: " https://team.slack.com/archives/C1/p2 ", note: "", builtInPath: null }), "/gh44-debug https://team.slack.com/archives/C1/p2");
+  assert.equal(buildTriagePrompt({ skill: "gh44-debug", link: "https://x.io/1", note: " Only on Safari. ", builtInPath: null }), "/gh44-debug https://x.io/1\n\nOnly on Safari.");
+  assert.equal(buildTriagePrompt({ skill: "oncall-triage", link: "https://x.io/1", note: "", builtInPath: "/m/SKILL.md" }), "Follow the triage steps in /m/SKILL.md for: https://x.io/1");
+  assert.equal(buildTriagePrompt({ skill: "gh44-debug", link: "", note: "Checkout breaks", builtInPath: null }), "/gh44-debug\n\nCheckout breaks");
+});
+
+test("a triage tab is named after the link's host", () => {
+  assert.equal(getTriageTabName("https://team.slack.com/archives/C1/p2"), "triage team.slack.com");
+  assert.equal(getTriageTabName("no link"), "triage");
 });

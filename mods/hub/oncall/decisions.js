@@ -116,6 +116,23 @@ export function filterDecisions({ decisions, filters = {}, search, seen = [], no
 export const getNewNudges = ({ decisions, since }) => decisions.filter((d) => d.isNotified && (!since || d.decidedAt > since));
 
 /** @param {number} usd */
+// What a triage by hand asks Claude: the skill on the pasted link, then the person's note. The
+// built-in skill is not installed in ~/.claude, so it goes in as its file to follow (builtInPath).
+/** @param {{ skill: string, link: string, note: string, builtInPath: string | null }} params */
+export function buildTriagePrompt({ skill, link, note, builtInPath }) {
+  const target = link.trim();
+  const extra = note.trim();
+  const start = builtInPath ? `Follow the triage steps in ${builtInPath} for: ${target || "the issue below"}` : `/${skill} ${target}`.trim();
+  return extra ? `${start}\n\n${extra}` : start;
+}
+
+// A tab name for a triage by hand: "triage join.slack.com", or "triage" for a note alone.
+/** @param {string} link */
+export const getTriageTabName = (link) => {
+  const host = /^https?:\/\/([^/?#]+)/.exec(link.trim())?.[1] ?? null;
+  return host ? `triage ${host}` : "triage";
+};
+
 export const formatCost = (usd) => `$${usd.toFixed(2)}`;
 
 // Who decided a row, for its "Decided by" label: a free filter, the domain check or the AI.

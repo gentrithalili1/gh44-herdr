@@ -1,22 +1,29 @@
 // The ⚙ settings view: General · GitHub · Linear · On-call, shown in the Omnia panel in place of its list.
-// It owns its inputs and edit state; the panel hands it the settings, the session and what to
-// do when the Linear key changes.
+// Groups are bays of strips and control rows (controls.js). It owns its inputs and edit state; the
+// panel hands it the settings, the session, what to do when the Linear key changes, and how to
+// count a case's rows and open its editor.
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { theme, notify } from "herdr";
-import { icon, palette, radioMark, stop, MONO_FONT, GUTTER } from "./ui.js";
+import { theme, notify, shared } from "herdr";
+import { icon, palette, stop, GUTTER } from "./ui.js";
+import {
+  bay, controlRow, toggleRow, radioRow, selectButton, getPickedText, button, statusLine, listTag, keyCell, keyCellEditing, fieldBox, linkLine, holderStrip,
+} from "./controls.js";
 import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
 import { loadInstalledSkills, uninstallGh44Omnia } from "./actions.js";
-import { openGh44Dialog } from "./gh44-dialog.js";
-import { CaseEditor } from "./case-editor.js";
+import { Gh44Setup } from "./gh44-dialog.js";
+import { caseStrips } from "./case-editor.js";
 import { OncallSettings } from "./oncall/settings.js";
 import {
-  addSkill, removeSkill, setSkillKey, isValidSkillName, GITHUB_SITUATIONS, LINEAR_SITUATIONS, ONCALL_SITUATIONS, canRunEntry, shortRepo,
-  ASK_ACTION, ASK_DESCRIPTION, CONTINUE_ACTION, CONTINUE_DESCRIPTION,
+  addSkill, removeSkill, setSkillKey, isValidSkillName, getSkillCandidates, GITHUB_SITUATIONS, LINEAR_SITUATIONS, ONCALL_SITUATIONS, canRunEntry, shortRepo,
+  getLinkEntry, isLinkEntry, ASK_ACTION, ASK_DESCRIPTION, CONTINUE_ACTION, CONTINUE_DESCRIPTION, LINK_ENTRIES,
 } from "./settings.js";
 
 /** @typedef {"general" | "github" | "linear" | "oncall"} SectionId */
 /** @typedef {"linearKey" | "skillKey" | "addSkill" | import("./oncall/settings.js").OncallInputId} InputId */
+/** @typedef {"github" | "linear" | "oncall"} SkillTab */
+/** @typedef {import("./settings.js").Situation} Situation */
+/** @typedef {{ value: string, label: string }} SelectOption */
 /**
  * @typedef {{
  *   login: string | null,
@@ -26,7 +33,7 @@ import {
  * }} Session
  */
 
-/** @type {{ tab: "github" | "linear" | "oncall", situations: { id: import("./settings.js").Situation, label: string }[] }[]} */
+/** @type {{ tab: SkillTab, situations: { id: Situation, label: string }[] }[]} */
 const SKILL_TABS = [
   { tab: "github", situations: GITHUB_SITUATIONS },
   { tab: "linear", situations: LINEAR_SITUATIONS },
@@ -45,10 +52,19 @@ const WHERE_TO_RUN_OPTIONS = [
   { id: "worktree", label: "Always a new worktree" },
   { id: "here", label: "Always this space" },
 ];
+/** @type {{ value: import("./settings.js").RowClick, label: string }[]} */
+const ROW_CLICK_OPTIONS = [
+  { value: "details", label: "Open details" },
+  { value: "select", label: "Select" },
+];
+// Where a settings select leaves its pick; the view reads it back each tick.
+const ROW_CLICK_SELECT = "hub.rowClickSelect";
+const START_COLLAPSED_SELECT = "hub.startCollapsedSelect";
 // Installed skills offered under the Add skill field.
 const SKILL_SUGGESTIONS = 6;
 const LINEAR_API_KEYS_URL = "https://linear.app/settings/account/security";
 const SWITCH_HEIGHT = 32;
+const LAST_TAB_HELP = "The last tab on can't be turned off";
 // How long "Click again to uninstall" waits for the second click.
 const UNINSTALL_CONFIRM_MS = 5_000;
 /** @type {Record<"notLinked" | "start", string>} */
@@ -62,9 +78,8 @@ const UNINSTALL_ERRORS = {
 /** @param {Session["linearAccount"]["status"]} status */
 const isLinearKeyPending = (status) => status === "missing" || status === "checking";
 
-// An Add skill suggestion from ~/.claude/skills: no repo.
-/** @param {string} name @returns {{ name: string, repo: string | null }} */
-const toInstalledCandidate = (name) => ({ name, repo: null });
+/** @param {{ a: string[], b: string[] }} params */
+const isSameList = ({ a, b }) => a.length === b.length && a.every((value, i) => value === b[i]);
 
 export class SettingsView {
   /**
@@ -73,14 +88,17 @@ export class SettingsView {
    *   session: Session,
    *   getSettings: () => import("./settings.js").Settings,
    *   patchSettings: (patch: Record<string, unknown>) => void,
-   *   saveSkills: (params: { tab: "github" | "linear" | "oncall", skills: import("./settings.js").Skills }) => void,
+   *   saveSkills: (params: { tab: SkillTab, skills: import("./settings.js").Skills }) => void,
    *   onLinearKeyChange: (cx: import("gpui-kit").Context) => void,
    *   reloadRepoSkills: (cx: import("gpui-kit").Context) => void,
    *   focusPanel: () => void,
-   *   openSelect: (params: { store: string, title: string, value: string | string[], options: { value: string, label: string }[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
+   *   openSelect: (params: { store: string, title: string, value: string | string[], options: SelectOption[], isMulti?: boolean, anchor?: import("./ui.js").Anchor | null }) => void,
+   *   openCaseEditor: (params: { tab: SkillTab, situation: Situation }) => void,
+   *   getCaseMatches: (params: { tab: SkillTab, situation: Situation }) => { count: number, refs: string[] } | null,
+   *   getGroupOptions: () => SelectOption[],
    * }} host
    */
-  constructor({ session, getSettings, patchSettings, saveSkills, onLinearKeyChange, reloadRepoSkills, focusPanel, openSelect }) {
+  constructor({ session, getSettings, patchSettings, saveSkills, onLinearKeyChange, reloadRepoSkills, focusPanel, openSelect, openCaseEditor, getCaseMatches, getGroupOptions }) {
     this.session = session;
     this.getSettings = getSettings;
     this.patchSettings = patchSettings;
@@ -88,6 +106,13 @@ export class SettingsView {
     this.onLinearKeyChange = onLinearKeyChange;
     this.reloadRepoSkills = reloadRepoSkills;
     this.focusPanel = focusPanel;
+    this.openSelect = openSelect;
+    this.openCaseEditor = openCaseEditor;
+    this.getCaseMatches = getCaseMatches;
+    this.getGroupOptions = getGroupOptions;
+    // The selects opened from here: store -> how its pick is saved. Read back each tick.
+    /** @type {Map<string, (value: unknown) => void>} */
+    this.openSelects = new Map();
     this.isOpen = false;
     // The last section shown, kept for the session.
     /** @type {SectionId} */
@@ -100,31 +125,30 @@ export class SettingsView {
     // Uninstall takes a second click within UNINSTALL_CONFIRM_MS; confirmedAt tells one click from the next.
     /** @type {{ status: "idle" | "confirming" | "starting", confirmedAt?: number }} */
     this.uninstall = { status: "idle" };
+    this.gh44 = new Gh44Setup({ getSettings, patchSettings });
     this.linearKeyInput = InputState.new({ placeholder: "lin_api_…" });
     this.linearKeyInput.set_masked(true);
     this.linearKeyInput.on("submit", (_e, cx) => this.handleSaveLinearKey(cx));
     this.trackFocus({ input: this.linearKeyInput, id: "linearKey" });
     // The skills editor: one key letter field and one Add skill field, moved to the row being edited.
-    /** @type {{ tab: "github" | "linear" | "oncall", skill: string } | null} */
+    /** @type {{ tab: SkillTab, skill: string } | null} */
     this.keyEditing = null;
-    /** @type {"github" | "linear" | "oncall" | null} */
+    /** @type {SkillTab | null} */
     this.addingTab = null;
-    this.caseEditor = new CaseEditor({ saveSkills });
     this.skillKeyInput = InputState.new({ placeholder: "" });
     this.skillKeyInput.on("change", (_e, cx) => this.handleSkillKeyChange(cx));
     this.trackFocus({ input: this.skillKeyInput, id: "skillKey" });
     // The typed name was turned down: it is not one word.
     this.isAddSkillRefused = false;
-    this.addSkillInput = InputState.new({ placeholder: "Skill name, as in /name" });
+    // Add a link… was picked: the field offers the link entries instead of skills.
+    this.isPickingLink = false;
+    this.addSkillInput = InputState.new({ placeholder: "Search skills, or type a name" });
     this.addSkillInput.on("change", (_e, cx) => { this.isAddSkillRefused = false; cx.notify(); });
     this.addSkillInput.on("submit", (_e, cx) => this.handleAddSkill({ skill: this.addSkillInput.value(), repo: this.getTypedSkillRepo(), cx }));
     this.trackFocus({ input: this.addSkillInput, id: "addSkill" });
     this.oncall = new OncallSettings({
       trackFocus: (params) => this.trackFocus(params),
       isFocused: (id) => this.focusedInput === id,
-      settingsGroup: (params) => this.settingsGroup(params),
-      settingsToggle: (params) => this.settingsToggle(params),
-      settingsChoice: (params) => this.settingsChoice(params),
       openSelect,
       skillGroups: () => this.skillGroups({ ...SKILL_TABS[2], skills: this.getSettings().skills }),
     });
@@ -132,6 +156,22 @@ export class SettingsView {
 
   isOncallShown() {
     return this.isOpen && this.sectionId === "oncall";
+  }
+
+  // Called every panel tick: saves the picks of the selects opened from here.
+  /** @param {import("gpui-kit").Context} cx */
+  tick(cx) {
+    if (this.isOncallShown()) this.oncall.tick(cx);
+    for (const [store, apply] of this.openSelects) {
+      const saved = shared(store);
+      if (saved && typeof saved === "object" && "value" in saved) apply(saved.value);
+    }
+  }
+
+  /** @param {{ store: string, title: string, value: string | string[], options: SelectOption[], isMulti?: boolean, anchor: import("./ui.js").Anchor | null, apply: (value: unknown) => void }} params */
+  openSettingSelect({ store, title, value, options, isMulti = false, anchor, apply }) {
+    this.openSelects.set(store, apply);
+    this.openSelect({ store, title, value, options, isMulti, anchor });
   }
 
   // Which of the view's inputs has the keyboard, so the panel's own keys stay off while typing.
@@ -155,6 +195,7 @@ export class SettingsView {
     if (section) this.sectionId = section;
     if (this.sectionId === "oncall") this.oncall.open(cx);
     this.loadSkillList(cx);
+    this.gh44.load(cx);
     this.reloadRepoSkills(cx);
     if (!this.getSettings().shouldShowLinear || this.session.linearAccount.status === "checking") return;
     this.session.linearAccount = { status: "checking" };
@@ -171,7 +212,7 @@ export class SettingsView {
     this.isOpen = false;
     this.keyEditing = null;
     this.addingTab = null;
-    this.caseEditor.collapse();
+    this.openSelects.clear();
     this.focusPanel();
   }
 
@@ -208,7 +249,7 @@ export class SettingsView {
   handleAddSkill({ skill, repo, cx }) {
     const name = skill.trim();
     if (!this.addingTab || !name) return;
-    if (!isValidSkillName(name)) {
+    if (!isValidSkillName(name) && !isLinkEntry(name)) {
       this.isAddSkillRefused = true;
       cx.notify();
       return;
@@ -216,6 +257,7 @@ export class SettingsView {
     this.saveSkills({ tab: this.addingTab, skills: addSkill({ skills: this.getSettings().skills, tab: this.addingTab, skill: name, repo }) });
     this.addSkillInput.set_value("");
     this.addingTab = null;
+    this.isPickingLink = false;
     this.focusPanel();
     cx.notify();
   }
@@ -262,70 +304,68 @@ export class SettingsView {
     return v_flex().id("linear-connect").p(16).gap(10).text_size(12.5).on_mouse_down("left", stop)
       .child(div().text_color(t.foreground).font_semibold().child("Connect Linear"))
       .child(div().text_color(t.dim).child(reason ?? "Paste a personal API key. It stays on this machine, readable only by you."))
-      .child(this.linearKeyField());
+      .children(this.linearKeyField());
   }
 
-  // [key ••••• | Save], Linear's answer when it turns a key down, and where to make a key.
+  // The secret field: [lin_api_••••] [Save], Linear's answer when it turns a key down, and where to make one.
   linearKeyField() {
     const t = theme();
     const isSaving = this.keySave.status === "saving";
-    const saveButton = h_flex().id("linear-key-save").h_full().px(10).gap(6).items_center().flex_none().text_size(12)
-      .bg(t.raised).text_color(isSaving ? t.muted : t.foreground)
-      .when(!isSaving, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleSaveLinearKey(cx)))
-      .when(isSaving, (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900)))
-      .child(isSaving ? "Checking…" : "Save");
-    return v_flex().flex_none().gap(6)
-      .child(h_flex().h(30).items_center().rounded(6).border(1).border_color(this.focusedInput === "linearKey" ? t.accent : t.input).bg(t.background).overflow_hidden()
-        .child(h_flex().flex_1().min_w(0).px(8).items_center().child(Input.new(this.linearKeyInput).flex_1().text_size(12).text_color(t.foreground)))
-        .child(div().w(1).h_full().bg(t.border))
-        .child(saveButton))
-      .when(this.keySave.status === "failed", (el) => el.child(div().text_size(11.5).text_color(palette(t).danger).child(this.keySave.message ?? "")))
-      .child(h_flex().id("linear-key-link").gap(4).items_center().text_size(11.5).text_color(t.accent).cursor_pointer()
-        .on_click((_e, cx) => cx.open_url(LINEAR_API_KEYS_URL))
-        .child("Create a key in Linear: Settings › Security & access"));
+    return [
+      h_flex().flex_none().gap(6).items_center()
+        .child(div().flex_1().min_w(0).child(fieldBox({
+          id: "linear-key", isFocused: this.focusedInput === "linearKey",
+          input: Input.new(this.linearKeyInput).flex_1().text_size(12).text_color(t.foreground),
+        })))
+        .child(button({
+          id: "linear-key-save", label: isSaving ? "Checking…" : "Save", variant: isSaving ? "busy" : "primary",
+          onClick: (cx) => this.handleSaveLinearKey(cx),
+        })),
+      ...(this.keySave.status === "failed" ? [div().text_size(11.5).text_color(palette(t).danger).child(this.keySave.message ?? "")] : []),
+      linkLine({ id: "linear-key-link", label: "Create a key in Linear ↗", url: LINEAR_API_KEYS_URL }),
+    ];
   }
 
-  // Settings' Linear section: who the key belongs to with Remove, or the key field.
+  // The API key's states: checking, connected with Remove, rejected or missing with the field.
   linearAccountRows() {
     const t = theme();
     const account = this.session.linearAccount;
-    if (account.status === "checking") return [div().text_size(12).text_color(t.dim).child("Checking the Linear key…")];
-    if (account.status !== "connected") {
-      const note = account.status === "failed" ? [div().text_size(11.5).text_color(palette(t).warning).child(`Could not check the key: ${account.message ?? "unknown error"}`)] : [];
-      return [...note, this.linearKeyField()];
+    switch (account.status) {
+      case "checking": return [statusLine({ id: "linear-key-checking", tone: "checking", text: "Checking the key…" })];
+      case "connected": return [statusLine({
+        id: "linear-key-connected", tone: "connected", text: `Connected as ${account.name}`,
+        action: button({ id: "linear-key-remove", label: "Remove", onClick: (cx) => this.handleRemoveLinearKey(cx) }),
+      })];
+      case "missing": return [
+        ...(account.message ? [statusLine({ id: "linear-key-rejected", tone: "rejected", text: "Key rejected by Linear", help: "Paste a new one." })] : []),
+        ...this.linearKeyField(),
+      ];
+      case "failed": return [
+        div().text_size(11.5).text_color(palette(t).warning).child(`Could not check the key: ${account.message ?? "unknown error"}`),
+        ...this.linearKeyField(),
+      ];
+      case "idle": return this.linearKeyField();
+      default: {
+        /** @type {never} */
+        const unknownStatus = account.status;
+        return unknownStatus;
+      }
     }
-    return [h_flex().h(28).px(6).gap(8).items_center()
-      .child(div().size(7).rounded(4).bg(palette(t).success))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(`Connected as ${account.name}`))
-      .child(div().id("linear-key-remove").h(24).px(10).flex().items_center().rounded(6).border(1).border_color(t.border).text_size(12)
-        .text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => this.handleRemoveLinearKey(cx))
-        .child("Remove"))];
   }
 
-  // The General · GitHub · Linear switch, then the picked section.
+  // The General · GitHub · Linear · On-call switch, then the picked section.
   // It takes the list's place until Esc or ⚙.
   render() {
     const t = theme();
     const settings = this.getSettings();
-    // A case entry being dragged drops on release over a case row (it handles it first);
-    // a release anywhere else cancels the drag.
     return v_flex().flex_1().min_h(0)
-      .on_mouse_up("left", (_e, cx) => this.caseEditor.cancelDrag(cx))
       .child(div().flex_none().px(GUTTER).pt(12).pb(12).border_b(1).border_color(t.border).child(this.sectionSwitch()))
       .child(v_flex().id("settings-list").flex_1().min_h(0).overflow_y_scrollbar().px(GUTTER).pt(14).pb(14).gap(18)
-        .children(this.settingsGroups(settings)))
-      // General keeps Uninstall pinned at the bottom, below the scrolling groups.
-      .when(this.sectionId === "general", (el) => el.child(div().flex_none().px(GUTTER).pt(14).pb(14).border_t(1).border_color(t.border)
-        .child(this.settingsGroup({
-          title: "Uninstall",
-          description: "Removes the gh44-omnia layout, mods and themes, and puts your keys and settings back from their backup.",
-          children: [this.uninstallButton()],
-        }))));
+        .children(this.settingsGroups(settings)));
   }
 
   // [⚙ General | GitHub | Linear]: a full-width segmented control. Every segment keeps a 1px
-  // border (transparent when not picked), so picking one moves nothing.
+  // border (no color, so transparent, when not picked), so picking one moves nothing.
   sectionSwitch() {
     const t = theme();
     return h_flex().id("settings-sections").w_full().h(SWITCH_HEIGHT).p(3).rounded(8).border(1).border_color(t.border).bg(t.background)
@@ -334,10 +374,11 @@ export class SettingsView {
         return h_flex().id(`settings-section-${section.id}`).flex_1().h_full().gap(6).items_center().justify_center().rounded(6)
           .border(1).text_size(12.5)
           .when(isOn, (el) => el.bg(t.raised).border_color(t.border).text_color(t.foreground).font_medium())
-          .when(!isOn, (el) => el.border_color("#00000000").text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .when(!isOn, (el) => el.text_color(t.muted).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => {
               this.sectionId = section.id;
-              this.caseEditor.collapse();
+              this.keyEditing = null;
+              this.addingTab = null;
               if (section.id === "oncall") this.oncall.open(cx);
               cx.notify();
             }))
@@ -346,40 +387,20 @@ export class SettingsView {
       }));
   }
 
-  // The groups of the shown section, each with a heading and a line on what it does.
+  // The bays of the shown section.
   /** @param {import("./settings.js").Settings} settings */
   settingsGroups(settings) {
     switch (this.sectionId) {
-      case "general": {
-        /** @param {boolean} isOn */
-        const isLastTab = (isOn) => isOn && !(settings.shouldShowGithub && settings.shouldShowLinear);
-        return [this.settingsGroup({
-          title: "Panel",
-          description: "Which tabs and hints the panel shows.",
-          children: [
-            this.settingsToggle({
-              id: "github", label: "Show the GitHub tab", isOn: settings.shouldShowGithub, isDisabled: isLastTab(settings.shouldShowGithub),
-              onToggle: () => this.patchSettings({ shouldShowGithub: !settings.shouldShowGithub }),
-            }),
-            this.settingsToggle({
-              id: "linear", label: "Show the Linear tab", isOn: settings.shouldShowLinear, isDisabled: isLastTab(settings.shouldShowLinear),
-              onToggle: () => this.patchSettings({ shouldShowLinear: !settings.shouldShowLinear }),
-            }),
-            this.settingsToggle({ id: "oncall", label: "Show the On-call tab", isOn: settings.shouldShowOncall, onToggle: () => this.patchSettings({ shouldShowOncall: !settings.shouldShowOncall }) }),
-            this.settingsToggle({ id: "hints", label: "Show key hints", isOn: settings.shouldShowKeyHints, onToggle: () => this.patchSettings({ shouldShowKeyHints: !settings.shouldShowKeyHints }) }),
-            this.settingsToggle({ id: "filter-chips", label: "Show active filters inline", isOn: settings.shouldShowFilterChips, onToggle: () => this.patchSettings({ shouldShowFilterChips: !settings.shouldShowFilterChips }) }),
-          ],
-        }), this.gh44Row()];
-      }
+      case "general": return this.generalGroups(settings);
       case "github":
         return this.skillGroups({ ...SKILL_TABS[0], skills: settings.skills });
       case "linear":
         return [
-          this.settingsGroup({ title: "API key", description: "Your personal Linear key. It stays on this machine, readable only by you.", children: this.linearAccountRows() }),
+          bay({ title: "API key", description: "Your personal Linear key. It stays on this machine, readable only by you.", children: this.linearAccountRows() }),
           // Without a working key (or while it is checked) only the key shows.
           ...(isLinearKeyPending(this.session.linearAccount.status) ? [] : [
             ...this.skillGroups({ ...SKILL_TABS[1], skills: settings.skills }),
-            this.settingsGroup({ title: "Where runs go", description: "Where a ticket's skill runs when the ticket has no worktree yet.", children: this.whereToRunRows(settings) }),
+            bay({ title: "Where runs go", description: "Where a ticket's skill runs when the ticket has no worktree yet. A case can set its own.", children: this.whereToRunRows(settings) }),
           ]),
         ];
       case "oncall":
@@ -392,15 +413,80 @@ export class SettingsView {
     }
   }
 
-  // gh44 extras: a line on what they are and View, which opens the gh44 dialog.
-  gh44Row() {
-    const t = theme();
-    return h_flex().flex_none().gap(10).items_center()
-      .child(div().flex_1().min_w(0).text_size(11.5).text_color(t.dim).child("Optional gh44 skills and theme."))
-      .child(h_flex().id("gh44-view").h(24).px(10).flex_none().items_center().rounded(6).border(1).border_color(t.border)
-        .text_size(12).text_color(t.foreground).cursor_pointer().hover((s) => s.bg(t.hover))
-        .on_click(() => openGh44Dialog())
-        .child("View"));
+  /** @param {import("./settings.js").Settings} settings */
+  generalGroups(settings) {
+    /** @param {boolean} isOn */
+    const isLastTab = (isOn) => isOn && !(settings.shouldShowGithub && settings.shouldShowLinear);
+    /** @param {{ id: string, label: string, isOn: boolean, key: string }} params */
+    const tabToggle = ({ id, label, isOn, key }) => toggleRow({
+      id, label, isOn, isDisabled: isLastTab(isOn), help: isLastTab(isOn) ? LAST_TAB_HELP : null, onToggle: () => this.patchSettings({ [key]: !isOn }),
+    });
+    return [
+      bay({
+        title: "Panel", description: "Which tabs and filters the panel shows.",
+        children: [
+          tabToggle({ id: "github", label: "Show the GitHub tab", isOn: settings.shouldShowGithub, key: "shouldShowGithub" }),
+          tabToggle({ id: "linear", label: "Show the Linear tab", isOn: settings.shouldShowLinear, key: "shouldShowLinear" }),
+          toggleRow({ id: "oncall", label: "Show the On-call tab", isOn: settings.shouldShowOncall, onToggle: () => this.patchSettings({ shouldShowOncall: !settings.shouldShowOncall }) }),
+          toggleRow({ id: "filter-chips", label: "Show active filters inline", isOn: settings.shouldShowFilterChips, onToggle: () => this.patchSettings({ shouldShowFilterChips: !settings.shouldShowFilterChips }) }),
+        ],
+      }),
+      bay({
+        title: "Rows", description: "What a GitHub or Linear row does. Space opens its details either way.",
+        children: [
+          controlRow({ id: "row-click", label: "Click on a row", control: this.rowClickSelect(settings) }),
+          toggleRow({
+            id: "notify-blocked", label: "Notify when an agent needs you", help: "Once, with the row it works on.",
+            isOn: settings.shouldNotifyBlocked, onToggle: () => this.patchSettings({ shouldNotifyBlocked: !settings.shouldNotifyBlocked }),
+          }),
+          controlRow({ id: "start-collapsed", label: "Start collapsed", help: "Groups that start closed when the panel loads.", control: this.startCollapsedSelect(settings) }),
+        ],
+      }),
+      bay({
+        title: "gh44 setup", description: "The gh44-brain skills: plan, implement and review tickets and PRs, one skill per step.",
+        children: this.gh44.cards(),
+      }),
+      bay({
+        title: "Uninstall",
+        children: [controlRow({
+          id: "uninstall", label: "Remove gh44-omnia", help: "Herdr switches to its main layout; your old keys and settings come back from their backup.",
+          control: this.uninstallButton(),
+        })],
+      }),
+    ];
+  }
+
+  /** @param {import("./settings.js").Settings} settings */
+  rowClickSelect(settings) {
+    const label = ROW_CLICK_OPTIONS.find((o) => o.value === settings.rowClick)?.label ?? "";
+    return selectButton({
+      id: "row-click", text: label,
+      onOpen: ({ anchor }) => this.openSettingSelect({
+        store: ROW_CLICK_SELECT, title: "Click on a row", value: settings.rowClick, options: ROW_CLICK_OPTIONS, anchor,
+        apply: (value) => {
+          const option = ROW_CLICK_OPTIONS.find((o) => o.value === value);
+          if (option && option.value !== this.getSettings().rowClick) this.patchSettings({ rowClick: option.value });
+        },
+      }),
+    });
+  }
+
+  // The groups listed here start collapsed; picked ones stay listed even when no row has them now.
+  /** @param {import("./settings.js").Settings} settings */
+  startCollapsedSelect(settings) {
+    const known = this.getGroupOptions();
+    const options = [...known, ...settings.startCollapsed.filter((id) => !known.some((o) => o.value === id)).map((id) => ({ value: id, label: id }))];
+    const picked = getPickedText(settings.startCollapsed.map((id) => options.find((o) => o.value === id)?.label ?? id));
+    return selectButton({
+      id: "start-collapsed", ...picked,
+      onOpen: ({ anchor }) => this.openSettingSelect({
+        store: START_COLLAPSED_SELECT, title: "Start collapsed", value: settings.startCollapsed, options, isMulti: true, anchor,
+        apply: (value) => {
+          const ids = Array.isArray(value) ? value.filter((id) => typeof id === "string") : [];
+          if (!isSameList({ a: ids, b: this.getSettings().startCollapsed })) this.patchSettings({ startCollapsed: ids });
+        },
+      }),
+    });
   }
 
   // First click: asks for a second one within UNINSTALL_CONFIRM_MS. Second click: runs uninstall.sh.
@@ -440,73 +526,79 @@ export class SettingsView {
     cx.notify();
   }
 
-  // A red button; its label asks for the second click while it waits for one.
+  // A danger button; filled, it asks for the second click while it waits for one.
   uninstallButton() {
-    const t = theme();
-    const danger = palette(t).danger;
     const status = this.uninstall.status;
-    const label = status === "confirming" ? "Click again to uninstall" : status === "starting" ? "Uninstalling…" : "Uninstall gh44-omnia";
-    return h_flex().id("gh44-uninstall").h(28).px(12).flex_none().self_start().items_center().rounded(6).border(1).border_color(danger)
-      .text_size(12).text_color(danger).font_medium()
-      .when(status === "confirming", (el) => el.bg(t.hover))
-      .when(status !== "starting", (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.handleUninstall(cx)))
-      .child(label);
+    switch (status) {
+      case "idle": return button({ id: "gh44-uninstall", label: "Uninstall", variant: "danger", onClick: (cx) => this.handleUninstall(cx) });
+      case "confirming": return button({ id: "gh44-uninstall", label: "Click again to uninstall", variant: "dangerConfirm", onClick: (cx) => this.handleUninstall(cx) });
+      case "starting": return button({ id: "gh44-uninstall", label: "Uninstalling…", variant: "busy" });
+      default: {
+        /** @type {never} */
+        const unknownStatus = status;
+        return unknownStatus;
+      }
+    }
   }
 
-  // "Where runs go": one choice; review skills never ask either way.
+  // "Where runs go": one choice (review skills never ask either way), and whether implement moves the ticket.
   /** @param {import("./settings.js").Settings} settings */
   whereToRunRows(settings) {
-    return WHERE_TO_RUN_OPTIONS.map((o) => this.settingsChoice({
-      id: `where-${o.id}`, label: o.label, isOn: settings.whereToRun === o.id,
-      onPick: () => this.patchSettings({ whereToRun: o.id }),
-    }));
-  }
-
-  // A tab's "Actions" and "By case" groups.
-  /** @param {{ tab: "github" | "linear" | "oncall", situations: { id: import("./settings.js").Situation, label: string }[], skills: import("./settings.js").Skills }} params */
-  skillGroups({ tab, situations, skills }) {
     return [
-      this.settingsGroup({ title: "Actions", description: "What the ▾ menu on a row offers, and the key that starts each one.", children: this.skillListRows({ tab, skills }) }),
-      this.settingsGroup({
-        title: "By case",
-        description: "What each kind of PR or ticket runs and shows.",
-        children: this.caseEditor.rows({ tab, situations, skills }),
+      ...WHERE_TO_RUN_OPTIONS.map((o) => radioRow({
+        id: `where-${o.id}`, label: o.label, isOn: settings.whereToRun === o.id,
+        onPick: () => this.patchSettings({ whereToRun: o.id }),
+      })),
+      toggleRow({
+        id: "move-in-progress", label: "Move to In progress when implement starts", help: "A ticket in Backlog or Todo moves once its work skill starts.",
+        isOn: settings.shouldMoveToInProgress, onToggle: () => this.patchSettings({ shouldMoveToInProgress: !settings.shouldMoveToInProgress }),
       }),
     ];
   }
 
-  // A tab's actions (name, key letter, remove), then Add skill. Ask is built in: no remove.
-  // A repo skill carries its repo's name; rows offer it only while that repo is focused.
-  /** @param {{ tab: "github" | "linear" | "oncall", skills: import("./settings.js").Skills }} params */
+  // A tab's Actions and By case bays.
+  /** @param {{ tab: SkillTab, situations: { id: Situation, label: string }[], skills: import("./settings.js").Skills }} params */
+  skillGroups({ tab, situations, skills }) {
+    return [
+      bay({
+        title: "Actions", count: skills[tab].list.length, description: "What the ▾ menu on a row offers, and the key that starts each one.",
+        children: this.skillListRows({ tab, skills }),
+      }),
+      bay({
+        title: "By case", count: situations.length, description: "What each kind of row suggests, in order. Click a case to edit it.",
+        children: caseStrips({ tab, skills, getMatches: this.getCaseMatches, onOpen: this.openCaseEditor }),
+      }),
+    ];
+  }
+
+  // A tab's actions as strips (name with its tags, key cell, remove), then Add skill. Built-in
+  // actions have no remove. A repo skill carries its repo's name; rows offer it only in that repo.
+  /** @param {{ tab: SkillTab, skills: import("./settings.js").Skills }} params */
   skillListRows({ tab, skills }) {
     const t = theme();
     const list = skills[tab].list;
     const { installedSkills, repo } = this.session;
     const skillRows = list.map((entry) => {
-      const isAsk = entry.name === ASK_ACTION || entry.name === CONTINUE_ACTION;
+      const isBuiltIn = entry.name === ASK_ACTION || entry.name === CONTINUE_ACTION;
       const isOtherRepo = Boolean(entry.repo) && entry.repo !== repo.name;
       const isRunnable = isOtherRepo || canRunEntry({ entry, installedSkills, repo });
-      return h_flex().id(`skill-${tab}-${entry.name}`).h(28).px(6).gap(8).items_center().rounded(6).hover((s) => s.bg(t.surface))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(isRunnable && !isOtherRepo ? t.foreground : t.dim).child(entry.name))
-        .when(Boolean(entry.repo), (el) => el.child(this.repoTag({ repo: entry.repo ?? "", isCurrent: !isOtherRepo })))
-        .when(!isRunnable, (el) => el.child(div().flex_none().text_size(11.5).text_color(palette(t).warning).child(entry.repo ? "not in repo" : "not installed")))
-        .when(isAsk, (el) => el.child(div().flex_none().text_size(11.5).text_color(t.dim).tooltip(entry.name === ASK_ACTION ? ASK_DESCRIPTION : CONTINUE_DESCRIPTION).child("built in")))
-        .child(this.skillKeyCell({ tab, entry }))
-        .child(isAsk ? div().size(22).flex_none() : this.removeSkillButton({ tab, skills, skill: entry.name }));
+      const link = getLinkEntry(entry.name);
+      return holderStrip({
+        id: `skill-${tab}-${entry.name}`, tone: "neutral", iconName: link?.icon ?? "play",
+        body: h_flex().min_w(0).gap(6).items_center()
+          .child(div().min_w(0).truncate().text_size(12.5).text_color(isRunnable && !isOtherRepo ? t.foreground : t.dim).child(link?.label ?? entry.name))
+          .when(Boolean(entry.repo), (el) => el.child(listTag({ kind: "repo", text: shortRepo(entry.repo ?? ""), tip: `Only in ${entry.repo}`, isDim: isOtherRepo })))
+          .when(!isRunnable, (el) => el.child(listTag({ kind: entry.repo ? "notInRepo" : "notInstalled" })))
+          .when(isBuiltIn, (el) => el.child(listTag({ kind: "builtIn", tip: entry.name === ASK_ACTION ? ASK_DESCRIPTION : CONTINUE_DESCRIPTION }))),
+        trailing: h_flex().gap(4).items_center()
+          .child(this.skillKeyCell({ tab, entry }))
+          .child(isBuiltIn ? div().size(22).flex_none() : this.removeSkillButton({ tab, skills, skill: entry.name })),
+      });
     });
-    return [...skillRows, this.addSkillRow({ tab, list })];
+    return [...skillRows, ...this.addSkillRows({ tab, list })];
   }
 
-  // The repo a skill belongs to; dim when it is not the focused one.
-  /** @param {{ repo: string, isCurrent: boolean }} params */
-  repoTag({ repo, isCurrent }) {
-    const t = theme();
-    return div().flex_none().px(6).h(18).flex().items_center().rounded(4).border(1).border_color(t.border).text_size(11)
-      .text_color(isCurrent ? t.muted : t.dim).tooltip(`Only in ${repo}`)
-      .child(shortRepo(repo));
-  }
-
-  /** @param {{ tab: "github" | "linear" | "oncall", skills: import("./settings.js").Skills, skill: string }} params */
+  /** @param {{ tab: SkillTab, skills: import("./settings.js").Skills, skill: string }} params */
   removeSkillButton({ tab, skills, skill }) {
     const t = theme();
     return div().id(`skill-remove-${tab}-${skill}`).size(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
@@ -515,112 +607,91 @@ export class SettingsView {
       .child(svg(icon("x")).size(12));
   }
 
-  // The key letter: a small box; clicking it takes the next letter typed.
-  /** @param {{ tab: "github" | "linear" | "oncall", entry: { name: string, key: string | null } }} params */
+  // The key cell: idle shows the letter; clicking it takes the next letter typed, or "No key".
+  /** @param {{ tab: SkillTab, entry: { name: string, key: string | null } }} params */
   skillKeyCell({ tab, entry }) {
     const t = theme();
     const isEditing = this.keyEditing?.tab === tab && this.keyEditing.skill === entry.name;
     if (isEditing) {
       return h_flex().flex_none().gap(4).items_center()
-        .child(div().w(26).h(22).px(4).flex().items_center().rounded(5).border(1).border_color(t.accent).bg(t.background)
-          .child(Input.new(this.skillKeyInput).w_full().text_size(12).font_family(MONO_FONT)))
-        .child(div().id(`skill-key-clear-${tab}-${entry.name}`).h(22).px(6).flex().items_center().rounded(5).cursor_pointer().text_size(11)
-          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_mouse_down("left", stop)
-          .on_click((_e, cx) => {
+        .child(keyCellEditing({ input: Input.new(this.skillKeyInput).w_full().text_size(12).text_color(t.foreground) }))
+        .child(div().on_mouse_down("left", stop).child(button({
+          id: `skill-key-clear-${tab}-${entry.name}`, label: "No key", variant: "ghost",
+          onClick: () => {
             this.saveSkills({ tab, skills: setSkillKey({ skills: this.getSettings().skills, tab, skill: entry.name, key: null }) });
             this.keyEditing = null;
             this.focusPanel();
-            cx.notify();
-          })
-          .child("No key"));
+          },
+        })));
     }
-    return div().id(`skill-key-${tab}-${entry.name}`).w(26).h(22).flex_none().flex().items_center().justify_center().rounded(5).cursor_pointer()
-      .border(1).border_color(t.border).font_family(MONO_FONT).text_size(12).text_color(entry.key ? t.foreground : t.dim)
-      .hover((s) => s.bg(t.hover)).tooltip(entry.key ? `Key ${entry.key}: click, then type a new letter` : "Click, then type a key letter")
-      .on_click((_e, cx) => {
+    return keyCell({
+      id: `skill-key-${tab}-${entry.name}`, letter: entry.key,
+      tip: entry.key ? `Key ${entry.key}: click, then type a new letter` : "Click, then type a key letter",
+      onClick: () => {
         this.keyEditing = { tab, skill: entry.name };
         this.skillKeyInput.set_value("");
         this.skillKeyInput.focus();
-        cx.notify();
-      })
-      .child(entry.key ?? "–");
+      },
+    });
   }
 
-  // "+ Add skill", or the field with the focused repo's skills and the installed ones not in the list yet.
-  /** @param {{ tab: "github" | "linear" | "oncall", list: { name: string }[] }} params */
-  addSkillRow({ tab, list }) {
+  // "+ Add skill", or a search over the focused repo's skills and the installed ones not in the list
+  // yet. On GitHub, Add a link… swaps them for the link entries not in the list.
+  /** @param {{ tab: SkillTab, list: { name: string }[] }} params */
+  addSkillRows({ tab, list }) {
     const t = theme();
     if (this.addingTab !== tab) {
-      return h_flex().id(`skill-add-${tab}`).h(28).px(6).gap(6).items_center().rounded(6).cursor_pointer().text_size(12.5)
+      return [h_flex().id(`skill-add-${tab}`).h(30).flex_none().px(6).gap(6).items_center().rounded(4).cursor_pointer().text_size(12.5)
         .text_color(t.accent).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => {
           this.addingTab = tab;
+          this.isPickingLink = false;
           this.addSkillInput.set_value("");
           this.addSkillInput.focus();
           cx.notify();
         })
-        .child("+ Add skill");
+        .child("+ Add skill")];
     }
-    const typed = this.addSkillInput.value().trim().toLowerCase();
-    const names = new Set(list.map((e) => e.name));
+    const typed = this.addSkillInput.value().trim();
     const { repo, installedSkills } = this.session;
-    /** @type {{ name: string, repo: string | null }[]} */
-    const candidates = [
-      ...(repo.name ? (repo.skills ?? []).map((name) => ({ name, repo: repo.name })) : []),
-      ...(installedSkills ?? []).filter((name) => !repo.skills?.includes(name)).map(toInstalledCandidate),
-    ];
-    const suggestions = candidates.filter((c) => !names.has(c.name) && c.name.toLowerCase().includes(typed)).slice(0, SKILL_SUGGESTIONS);
-    return v_flex().flex_none().gap(4)
-      .child(h_flex().h(30).px(8).gap(6).items_center().rounded(6).border(1).border_color(t.accent).bg(t.background)
-        .child(Input.new(this.addSkillInput).flex_1().text_size(12).text_color(t.foreground))
-        .child(div().id(`skill-add-cancel-${tab}`).px(4).text_size(11.5).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground))
+    const names = list.map((e) => e.name);
+    const links = tab === "github" ? LINK_ENTRIES.filter((e) => isLinkEntry(e.name) && !names.includes(e.name)) : [];
+    const suggestions = this.isPickingLink ? [] : getSkillCandidates({ names, installedSkills, repo, typed }).slice(0, SKILL_SUGGESTIONS);
+    /** @param {{ id: string, iconName: string, label: string, tag: ReturnType<typeof div>, onClick: (cx: import("gpui-kit").Context) => void }} params */
+    const option = ({ id, iconName, label, tag, onClick }) => h_flex().id(id).h(26).px(8).gap(6).items_center().rounded(5).cursor_pointer()
+      .text_size(12).text_color(t.foreground).hover((st) => st.bg(t.hover))
+      .on_mouse_down("left", stop)
+      .on_click((_e, cx) => onClick(cx))
+      .child(svg(icon(iconName)).size(10).flex_none().text_color(iconName === "play" ? t.accent : t.muted))
+      .child(div().flex_1().min_w(0).truncate().child(label))
+      .child(tag);
+    const linkOptions = this.isPickingLink
+      ? links.map((e) => option({ id: `skill-link-${tab}-${e.id}`, iconName: e.icon, label: e.label, tag: listTag({ kind: "link" }), onClick: (cx) => this.handleAddSkill({ skill: e.name, repo: null, cx }) }))
+      : [];
+    const addLink = !this.isPickingLink && links.length > 0
+      ? [option({ id: `skill-add-link-${tab}`, iconName: "link", label: "Add a link…", tag: div(), onClick: (cx) => { this.isPickingLink = true; cx.notify(); } })]
+      : [];
+    return [
+      fieldBox({
+        id: `skill-add-${tab}`, isFocused: this.focusedInput === "addSkill", iconName: "search",
+        input: Input.new(this.addSkillInput).flex_1().text_size(12).text_color(t.foreground),
+        trailing: div().id(`skill-add-cancel-${tab}`).px(8).text_size(11.5).text_color(t.dim).cursor_pointer().hover((s) => s.text_color(t.foreground))
           .on_mouse_down("left", stop)
           .on_click((_e, cx) => { this.addingTab = null; this.focusPanel(); cx.notify(); })
-          .child("Cancel")))
-      .children(suggestions.map((c) => h_flex().id(`skill-suggest-${tab}-${c.name}`).h(26).px(8).gap(6).items_center().rounded(6).cursor_pointer()
-        .text_size(12).text_color(t.foreground).hover((s) => s.bg(t.hover))
-        .on_mouse_down("left", stop)
-        .on_click((_e, cx) => this.handleAddSkill({ skill: c.name, repo: c.repo, cx }))
-        .child(div().text_color(t.accent).child("+"))
-        .child(div().flex_1().min_w(0).truncate().child(c.name))
-        .when(Boolean(c.repo), (el) => el.child(this.repoTag({ repo: c.repo ?? "", isCurrent: true })))))
-      .when(suggestions.length === 0, (el) => el.child(div().px(8).text_size(11.5).text_color(t.dim)
-        .child(typed ? "↵ adds it by this name" : "No more skills in ~/.claude/skills or this repo's .claude. Type a name.")))
-      .when(this.isAddSkillRefused, (el) => el.child(div().px(8).text_size(11.5).text_color(palette(t).danger)
-        .child("A skill name is one word: letters, digits, _ : . or -")));
-  }
-
-  /** @param {{ title: string, description: string, children: ReturnType<typeof h_flex>[] }} params */
-  settingsGroup({ title, description, children }) {
-    const t = theme();
-    return v_flex().flex_none().gap(6)
-      .child(v_flex().gap(2)
-        .child(div().text_size(11.5).font_semibold().text_color(t.foreground).child(title))
-        .child(div().text_size(11.5).text_color(t.dim).child(description)))
-      .children(children);
-  }
-
-  // A checkbox row. Disabled (the last shown tab): dimmed, with "Keep one tab" on hover.
-  /** @param {{ id: string, label: string, isOn: boolean, isDisabled?: boolean, onToggle: (cx: import("gpui-kit").Context) => void }} params */
-  settingsToggle({ id, label, isOn, isDisabled = false, onToggle }) {
-    const t = theme();
-    return h_flex().id(`settings-toggle-${id}`).h(28).px(6).gap(8).items_center().rounded(6)
-      .text_size(12.5).text_color(isDisabled ? t.muted : t.foreground)
-      .when(isDisabled, (el) => el.tooltip("Keep one tab"))
-      .when(!isDisabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click((_e, cx) => { onToggle(cx); cx.notify(); }))
-      .child(svg(icon(isOn ? "checkbox-checked" : "checkbox")).size(14).flex_none().text_color(isOn && !isDisabled ? t.accent : t.dim))
-      .child(label);
-  }
-
-  // One option of a single choice: a filled dot when picked.
-  /** @param {{ id: string, label: string, isOn: boolean, onPick: (cx: import("gpui-kit").Context) => void }} params */
-  settingsChoice({ id, label, isOn, onPick }) {
-    const t = theme();
-    return h_flex().id(`settings-choice-${id}`).h(28).px(6).gap(8).items_center().rounded(6).cursor_pointer()
-      .text_size(12.5).text_color(t.foreground).hover((s) => s.bg(t.hover))
-      .on_click((_e, cx) => { onPick(cx); cx.notify(); })
-      .child(radioMark({ t, isOn }))
-      .child(label);
+          .child("Cancel"),
+      }),
+      v_flex().flex_none().p(3).gap(1).rounded(6).border(1).border_color(t.border).bg(t.popover)
+        .children(suggestions.map((c) => option({
+          id: `skill-suggest-${tab}-${c.name}`, iconName: "play", label: c.name,
+          tag: c.repo ? listTag({ kind: "repo", text: shortRepo(c.repo) }) : listTag({ kind: "installed" }),
+          onClick: (cx) => this.handleAddSkill({ skill: c.name, repo: c.repo, cx }),
+        })))
+        .children(linkOptions)
+        .children(addLink)
+        .when(suggestions.length === 0 && !this.isPickingLink, (el) => el.child(div().px(8).py(4).text_size(11.5).text_color(t.dim)
+          .child(typed ? "↵ adds it by this name" : "No more skills in ~/.claude/skills or this repo's .claude. Type a name.")))
+        .when(this.isAddSkillRefused, (el) => el.child(div().px(8).py(4).text_size(11.5).text_color(palette(t).danger)
+          .child("A skill name is one word: letters, digits, _ : . or -"))),
+    ];
   }
 }

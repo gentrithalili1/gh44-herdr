@@ -57,7 +57,7 @@ To remove it:
 | ---------------------------- | -------------------------------------------------------------------------------------- |
 | `layouts/gh44-omnia.json`    | The layout                                                                             |
 | `keys.json`, `settings.json` | Keys and settings                                                                      |
-| `mods/`                      | gh44 mods: `hub` (Omnia panel), `gh44-omnia-tabs` (tab bar), `auto-title` (names tabs) |
+| `mods/`                      | gh44 mods: `hub` (Omnia panel), `gh44-omnia-tabs` (tab bar), `gh44-toasts` (notifications, top right), `auto-title` (names tabs) |
 | `mods.txt`                   | Mods without an installer, copied from GitHub                                          |
 | `plugins.txt`                | Mods with their own installer                                                          |
 | `install.sh`                 | Sets up this machine                                                                   |

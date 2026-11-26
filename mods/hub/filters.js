@@ -98,7 +98,7 @@ export const PULL_REQUEST_GROUPS = [
   { id: "draft", label: "Drafts", tone: "neutral" },
 ];
 
-const isMyPullRequest = ({ pr, login }) => Boolean(login) && pr.author === login;
+export const isMyPullRequest = ({ pr, login }) => Boolean(login) && pr.author === login;
 
 export function getPullRequestGroup({ pr, login }) {
   if (pr.isDraft) return "draft";

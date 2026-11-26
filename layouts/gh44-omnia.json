@@ -177,6 +177,17 @@
       "resizable": false
     }
   ],
+  "floating": [
+    {
+      "id": "toasts",
+      "content": {
+        "mod": "gh44-toasts"
+      },
+      "edge": "top",
+      "align": "end"
+    }
+  ],
+  "toast": "gh44-toasts",
   "background": "canvas",
   "terminal_padding": [
     14,

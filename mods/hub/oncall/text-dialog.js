@@ -1,9 +1,10 @@
 // The On-call long-text dialog: the hub mod opened as a dialog (props().dialog === ONCALL_TEXT_DIALOG)
 // to read and edit "My domain" or the repo profile's summary, which take too much room inline.
 import { div } from "gpui-kit";
-import { h_flex, v_flex, TextareaState, Textarea } from "gpui-base";
+import { v_flex, TextareaState, Textarea } from "gpui-base";
 import { theme, notify, props, openOverlay, closeOverlay, setShared } from "herdr";
 import { palette, stop, MONO_FONT } from "../ui.js";
+import { button, dialogHeader, dialogFooter } from "../controls.js";
 import { MAX_DOMAIN_LENGTH } from "./config.js";
 import { loadOncallConfig, saveOncallConfig } from "./client.js";
 
@@ -104,29 +105,23 @@ export class OncallTextDialog {
     });
   }
 
-  /** @param {{ id: string, label: string, isPrimary: boolean, isDisabled: boolean, onClick: (cx: import("gpui-kit").Context) => void }} params */
-  button({ id, label, isPrimary, isDisabled, onClick }) {
-    const t = theme();
-    const base = div().id(id).h(28).px(14).flex_none().flex().items_center().rounded(6).border(1).text_size(12);
-    const styled = isPrimary ? base.border_color(t.solid).bg(t.solid).text_color(t.solid_foreground) : base.border_color(t.border).text_color(t.foreground);
-    if (isDisabled) return styled.opacity(0.5).child(label);
-    return styled.cursor_pointer().hover((s) => s.opacity(0.88)).on_click((_e, cx) => onClick(cx)).child(label);
-  }
-
   render() {
     const t = theme();
     const def = FIELDS[this.field];
     const footerText = this.status === "saving" ? "Saving…" : this.isChanged ? "Not saved yet" : "";
-    return v_flex().id("oncall-text-dialog").size_full().p(16).gap(10).bg(t.background)
-      .child(v_flex().gap(4)
-        .child(div().text_size(14).font_semibold().text_color(t.foreground).child(def.title))
-        .child(div().text_size(12).text_color(t.muted).child(def.description)))
-      .child(div().id("oncall-text-field").flex_1().min_h(0).rounded(6).border(1).border_color(t.input).px(8).py(6).bg(t.background)
-        .overflow_y_scrollbar().on_mouse_down("left", stop)
-        .child(Textarea.new(this.input).w_full().h_full().text_size(12).text_color(t.foreground).when(def.isMono, (el) => el.font_family(MONO_FONT))))
-      .child(h_flex().gap(8).items_center()
-        .child(div().flex_1().text_size(11.5).text_color(palette(t).warning).child(footerText))
-        .child(this.button({ id: "oncall-text-cancel", label: "Cancel", isPrimary: false, isDisabled: false, onClick: () => closeOverlay(props().overlay) }))
-        .child(this.button({ id: "oncall-text-save", label: "Save", isPrimary: true, isDisabled: this.status !== "ready" || !this.isChanged, onClick: (cx) => this.handleSave(cx) })));
+    const canSave = this.status === "ready" && this.isChanged;
+    return v_flex().id("oncall-text-dialog").size_full().min_h(0).rounded(8).overflow_hidden().bg(t.popover).text_color(t.foreground)
+      .child(dialogHeader({ tone: "neutral", iconName: "pencil", title: def.title, subtitle: def.description }))
+      .child(div().flex_1().min_h(0).p(12)
+        .child(div().id("oncall-text-field").size_full().rounded(6).border(1).border_color(t.input).px(8).py(6).bg(t.background)
+          .overflow_y_scrollbar().on_mouse_down("left", stop)
+          .child(Textarea.new(this.input).w_full().h_full().text_size(12).text_color(t.foreground).when(def.isMono, (el) => el.font_family(MONO_FONT)))))
+      .child(dialogFooter({
+        left: div().text_size(11.5).text_color(palette(t).warning).child(footerText),
+        buttons: [
+          button({ id: "oncall-text-cancel", label: "Cancel", onClick: () => closeOverlay(props().overlay) }),
+          button({ id: "oncall-text-save", label: "Save", variant: canSave ? "primary" : "normal", onClick: canSave ? (cx) => this.handleSave(cx) : null }),
+        ],
+      }));
   }
 }

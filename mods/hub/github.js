@@ -3,9 +3,12 @@
 import { exec } from "herdr";
 
 export const PAGE_SIZE = 30;
+// Checks per PR read for their names; a PR with more rarely fails past these.
+const CHECKS_FETCHED = 30;
 const GH_TIMEOUT_MS = 60_000;
 
-// One CI state per PR (the last commit's rollup) instead of every check: the light part.
+// One CI state per PR (the last commit's rollup) and the names and results of its first checks, for
+// the case rules on a failing check's name.
 const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
   search(query: $q, type: ISSUE_ADVANCED, first: $first, after: $after) {
     issueCount
@@ -18,13 +21,27 @@ const SEARCH_QUERY = `query($q: String!, $first: Int!, $after: String) {
         labels(first: 5) { nodes { name color } }
         reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name combinedSlug } } } }
         latestReviews(first: 10) { nodes { author { login } } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: ${CHECKS_FETCHED}) { nodes {
+          ... on CheckRun { name conclusion } ... on StatusContext { context state }
+        } } } } } }
       }
     }
   }
 }`;
 
 const CI_BY_ROLLUP = { SUCCESS: "passing", FAILURE: "failing", ERROR: "failing", PENDING: "pending", EXPECTED: "pending" };
+// A check run's conclusion or a status's state that fails the PR's checks.
+const FAILED_CHECK = ["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED"];
+
+// The names of the last commit's failing checks: check runs and commit statuses.
+/**
+ * @param {{ contexts?: { nodes?: { name?: string, conclusion?: string, context?: string, state?: string }[] } } | null | undefined} rollup
+ * @returns {string[]}
+ */
+const toFailingChecks = (rollup) => (rollup?.contexts?.nodes ?? [])
+  .filter((c) => FAILED_CHECK.includes(c.conclusion ?? c.state))
+  .map((c) => c.name ?? c.context)
+  .filter(Boolean);
 
 const toPullRequest = (pr) => {
   const requested = (pr.reviewRequests?.nodes ?? []).map((r) => r.requestedReviewer).filter(Boolean);
@@ -42,6 +59,7 @@ const toPullRequest = (pr) => {
     // GitHub gives a label's color as hex without the "#".
     labelColors: Object.fromEntries((pr.labels?.nodes ?? []).map((l) => [l.name, `#${l.color}`])),
     ci: CI_BY_ROLLUP[pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state] ?? "none",
+    failingChecks: toFailingChecks(pr.commits?.nodes?.[0]?.commit?.statusCheckRollup),
     requestedUsers: requested.filter((r) => r.login).map((r) => r.login),
     requestedTeams: requested.filter((r) => r.combinedSlug).map((r) => ({ value: r.combinedSlug, label: r.name })),
     reviewers: (pr.latestReviews?.nodes ?? []).map((r) => r.author?.login).filter(Boolean),
@@ -52,6 +70,7 @@ const toPullRequest = (pr) => {
   };
 };
 
+/** @param {string} stderr @returns {{ status: "error", reason: "auth" | "failed", message?: string }} */
 const toFailure = (stderr) => {
   if (/gh auth login|authentication|401/i.test(stderr)) return { status: "error", reason: "auth" };
   return { status: "error", reason: "failed", message: stderr.trim().split("\n")[0] };
@@ -182,6 +201,29 @@ export async function removeWorktree({ main, path, branch, machine }) {
   if (removed.code !== 0) return { status: "failed", reason: "dirty", message: (removed.stderr || removed.stdout).trim().split("\n")[0] };
   await exec("git", ["branch", "-D", branch], { cwd: main, on: machine });
   return { status: "removed" };
+}
+
+// owner/name from a PR's URL: https://github.com/o/n/pull/15.
+const PULL_REQUEST_REPO = /github\.com\/([^/]+\/[^/]+)\/pull\//;
+
+// Asks a PR's reviewers to review it again: GitHub requests their review anew. An error's detail is
+// gh's raw output (or the bad URL); the caller picks the copy.
+/** @typedef {"notPullRequest" | "auth" | "failed"} NudgeFailure */
+/**
+ * @param {{ pr: { url: string, number: number }, reviewers: string[] }} params
+ * @returns {Promise<{ status: "success" } | { status: "error", reason: NudgeFailure, detail: string }>}
+ */
+export async function nudgeReviewers({ pr, reviewers }) {
+  const repo = pr.url.match(PULL_REQUEST_REPO)?.[1];
+  if (!repo) return { status: "error", reason: "notPullRequest", detail: pr.url };
+  try {
+    const r = await exec("gh", ["pr", "edit", String(pr.number), "--repo", repo, "--add-reviewer", reviewers.join(",")], { timeout: GH_TIMEOUT_MS });
+    if (r.code === 0) return { status: "success" };
+    const detail = (r.stderr || r.stdout).trim();
+    return { status: "error", reason: toFailure(detail).reason, detail };
+  } catch (error) {
+    return { status: "error", reason: "failed", detail: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function loadGithubLogin() {

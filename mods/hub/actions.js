@@ -2,10 +2,7 @@
 // Also Ask, and the gh44 installs and uninstall.
 import { run, spaces, agents, appHome, home, notify, openOverlay, exec } from "herdr";
 import { moveIssueToInProgress } from "./linear.js";
-import { getIssueStage, shortSkill, getAskPrompt, isValidSkillName, ASK_ACTION } from "./settings.js";
-
-// Starting work on a ticket that is not started yet moves it to In Progress.
-const NOT_STARTED_STAGES = ["backlog", "todo"];
+import { shouldMoveIssue, shortSkill, getAskPrompt, isValidSkillName, ASK_ACTION } from "./settings.js";
 
 async function startIssue(issue) {
   const r = await moveIssueToInProgress(issue);
@@ -171,8 +168,13 @@ export function focusAgent(agent) {
 //   space? (a space already open on the branch), issue? (the Linear issue, for its status) }
 // role (settings.js getSkillRole): a review skill gets prRef, a work skill moves a not started ticket.
 // isBackground: open the tab without switching to it (reviews). isWorktree: in the ticket's worktree.
+// shouldMoveToInProgress: the Linear setting that lets a work skill move the ticket.
 // Ask runs as startAsk. Resolves once a new worktree's branch is ready and its dialog is open.
-export async function startSkill({ skill, target, role = "other", isWorktree = false, isBackground = false }) {
+/**
+ * @param {{ skill: string, target: { ref: string, label: string } & Record<string, any>, role?: import("./settings.js").SkillRole, isWorktree?: boolean, isBackground?: boolean,
+ *   shouldMoveToInProgress?: boolean }} params
+ */
+export async function startSkill({ skill, target, role = "other", isWorktree = false, isBackground = false, shouldMoveToInProgress = true }) {
   if (skill === ASK_ACTION) {
     startAsk(target);
     return;
@@ -181,7 +183,7 @@ export async function startSkill({ skill, target, role = "other", isWorktree = f
   const prompt = `/${skill} ${ref}`;
   const name = `${target.label} ${shortSkill(skill)}`;
   const space = spaces().find((s) => s.active);
-  if (target.issue && role === "work" && NOT_STARTED_STAGES.includes(getIssueStage(target.issue))) void startIssue(target.issue);
+  if (shouldMoveIssue({ isOn: shouldMoveToInProgress, role, issue: target.issue })) void startIssue(target.issue);
   if (isWorktree && target.space) {
     run("tab.new", { name, space: target.space, folder: target.worktree, argv: ["claude", prompt], focus: !isBackground });
     return;
