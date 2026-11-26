@@ -10,15 +10,15 @@ import {
   filterPullRequests, filterIssues, groupIssuesByState, toOptions, getAuthorOptions, buildIssueFilter, getProjectOptions, buildPullRequestQuery,
   getMyReviewState, isReviewScope, groupPullRequests, isGithubQuery, isMyPullRequest, getPullRequestGroup, PULL_REQUEST_GROUPS,
 } from "./filters.js";
+import { PAGE_SIZE, removeWorktree, nudgeReviewers } from "./github.js";
 import {
-  PAGE_SIZE, loadPullRequests, loadRepoName, loadRepoId, loadRepoLabels, loadRepoUsers, loadMyTeams, loadGithubLogin,
-  loadWorktrees, loadMergedWorktrees, removeWorktree, nudgeReviewers,
-} from "./github.js";
-import { loadIssues, loadLinearMeta } from "./linear.js";
+  loadPullRequests, loadRepoName, loadRepoId, loadRepoLabels, loadRepoUsers, loadMyTeams, loadGithubLogin,
+  loadWorktrees, loadMergedWorktrees, loadIssues, loadLinearMeta, findAgentFor, DEMO_STORE, isDemo,
+} from "./data.js";
 import {
   icon, palette, stop, toAnchor, holderLook, splitButtonLook, MONO_FONT, GUTTER, HOLDER_WIDTH, ACTION_COLUMN_WIDTH, SPLIT_BUTTON_HEIGHT,
 } from "./ui.js";
-import { findSpaceOnBranch, findAgentFor, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
+import { findSpaceOnBranch, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
 import { SettingsView } from "./settings-view.js";
 import { button } from "./controls.js";
 import {
@@ -30,7 +30,8 @@ import { CaseEditorDialog, CASE_EDITOR_DIALOG, openCaseEditor, getCaseLabel } fr
 import { Gh44Dialog, GH44_DIALOG, openGh44Dialog } from "./gh44-dialog.js";
 import { OncallTextDialog, ONCALL_TEXT_DIALOG } from "./oncall/text-dialog.js";
 import { OncallTriageDialog, ONCALL_TRIAGE_DIALOG, openOncallTriageDialog } from "./oncall/triage-dialog.js";
-import { resumeOncall, loadOncallConfig, startOncall, stopOncall, loadReport } from "./oncall/client.js";
+import { resumeOncall, loadReport } from "./oncall/client.js";
+import { loadOncallConfig, startOncall, stopOncall } from "./data.js";
 import { OncallView, ReportView, runSkillOnIssue, runOncallAction, ONCALL_MENU_ITEMS } from "./oncall/view.js";
 import { ONCALL_FILTERS_STORE, ONCALL_DEFAULTS } from "./oncall/decisions.js";
 import { SAVED_FILTERS_STORE, getFilterSets, removeFilterSet, findActiveSet, getFilterChips, suggestSetName } from "./saved-filters.js";
@@ -452,7 +453,11 @@ const getRunFor = ({ tab, situation, skill, target }) => {
 
 // startSkill with the Linear setting that lets a work skill move its ticket.
 /** @param {Parameters<typeof startSkill>[0]} start */
-const runSkill = (start) => startSkill({ ...start, shouldMoveToInProgress: getPanelSettings().shouldMoveToInProgress });
+// Demo mode starts nothing: its rows are made up, and a real start could move a real ticket.
+const runSkill = async (start) => {
+  if (isDemo()) return;
+  await startSkill({ ...start, shouldMoveToInProgress: getPanelSettings().shouldMoveToInProgress });
+};
 
 // Since when an agent works (its tab's working_since) or needs you (its tab's last change).
 // null: Herdr has no time for it, so none is shown.
@@ -466,7 +471,7 @@ const agentSince = (agent) => {
 
 // An agent as row-action.js reads it.
 /** @param {ReturnType<typeof findAgentFor>} agent @returns {import("./row-action.js").RowAgent | null} */
-const toRowAgent = (agent) => (agent ? { status: agent.status, tabName: agent.tab_name, since: agentSince(agent) } : null);
+const toRowAgent = (agent) => (agent ? { status: agent.status, tabName: agent.tab_name, since: "since" in agent && typeof agent.since === "number" ? agent.since : agentSince(agent) } : null);
 
 function startTicketSkill({ skill, menu }) {
   const { place, isBackground } = getRunFor({ tab: "linear", situation: menu.situation, skill, target: menu.target });
@@ -612,6 +617,12 @@ export default class Hub extends View {
         // `herdr-app do hub.oncall-start` / `hub.oncall-stop`: go on or off call (bindable in keys.json).
         if (command === "oncall-start" || command === "oncall-stop") await this.switchOncall({ isOn: command === "oncall-start" });
         if (command === "cleanup") await this.runCleanup(cx);
+        // `herdr-app do hub.demo-on` / `hub.demo-off`, then ./reload.sh: made-up data for screenshots (data.js).
+        if (command === "demo-on" || command === "demo-off") {
+          setShared(DEMO_STORE, command === "demo-on");
+          this.resetLoadedData();
+          session.login = await loadGithubLogin();
+        }
         if (command === "row-start" && pendingRowStart) {
           const { tab, rowId, skill } = pendingRowStart;
           pendingRowStart = null;
@@ -1294,6 +1305,17 @@ export default class Hub extends View {
 
   githubStore() {
     return `${STORE.github}|${this.repoId ?? "none"}`;
+  }
+
+  // Forgets everything loaded, so the next tick loads it again (after demo mode switches).
+  resetLoadedData() {
+    for (const map of [cache, repoIds, repoCheckedAt, repoNames, repoLabels, repoUsers, repoNameCheckedAt, myTeams]) map.clear();
+    session.login = null;
+    session.repo = { id: null, folder: null, name: null, skills: null };
+    this.folder = null;
+    this.repoId = null;
+    this.githubKey = null;
+    this.linearKey = null;
   }
 
   // Where a branch is checked out: a space on it (it may be in another repo), else one of the

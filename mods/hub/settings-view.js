@@ -9,7 +9,7 @@ import { icon, palette, stop, GUTTER } from "./ui.js";
 import {
   bay, controlRow, toggleRow, radioRow, selectButton, getPickedText, button, statusLine, listTag, keyCell, keyCellEditing, fieldBox, linkLine, holderStrip,
 } from "./controls.js";
-import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./linear.js";
+import { loadLinearViewer, saveLinearKey, removeLinearKey } from "./data.js";
 import { loadInstalledSkills, uninstallGh44Omnia } from "./actions.js";
 import { Gh44Setup } from "./gh44-dialog.js";
 import { caseStrips } from "./case-editor.js";

@@ -9,7 +9,7 @@ import { button, dialogHeader, dialogSection, dialogFooter, fieldBox, selectButt
 import { loadInstalledSkills, loadRepoSkills } from "../actions.js";
 import { BUILT_IN_TRIAGE_SKILL } from "./config.js";
 import { buildTriagePrompt, getTriageTabName } from "./decisions.js";
-import { loadOncallConfig } from "./client.js";
+import { loadOncallConfig } from "../data.js";
 
 export const ONCALL_TRIAGE_DIALOG = "oncall-triage";
 // The skill select's pick, read back on every render.

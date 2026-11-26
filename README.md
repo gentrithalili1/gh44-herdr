@@ -68,27 +68,32 @@ To remove it:
 
 ## Screenshots
 
+Made-up data from demo mode (`herdr-app do hub.demo-on`, then `./reload.sh`; `hub.demo-off` to leave).
+
 <table>
   <tr>
-    <th>Omnia panel</th>
+    <th>GitHub</th>
+    <th>Linear</th>
     <th>On-call</th>
-    <th>Filters</th>
-    <th>Clean up</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/work-panel.png" alt="Omnia panel with a PR row and its skill menu" width="220"></td>
-    <td align="center"><img src="docs/oncall.png" alt="On-call tab: listening to 7 projects, all clear" width="220"></td>
-    <td align="center"><img src="docs/filters.png" alt="GitHub tab filters: author, label, team, reviews, assignee, CI and sort" width="220"></td>
-    <td align="center"><img src="docs/merged-worktrees.png" alt="Note offering to clean up merged worktrees" width="220"></td>
+    <td align="center"><img src="docs/omnia-github.png" alt="GitHub tab: PRs grouped by whose move it is, a merged worktree note and an agent working on a PR" width="240"></td>
+    <td align="center"><img src="docs/omnia-linear.png" alt="Linear tab: tickets by status, each with its next skill or its running agent" width="240"></td>
+    <td align="center"><img src="docs/omnia-oncall.png" alt="On-call tab: Sentry issues the AI reported, held and ignored" width="240"></td>
   </tr>
+</table>
+
+<table>
   <tr>
     <th>General settings</th>
     <th>GitHub settings</th>
     <th>Linear settings</th>
+    <th>On-call settings</th>
   </tr>
   <tr>
-    <td align="center"><img src="docs/settings-general.png" alt="General settings: tabs, gh44 theme and skills" width="220"></td>
-    <td align="center"><img src="docs/settings-github.png" alt="GitHub settings: skills and the default for each row" width="220"></td>
-    <td align="center"><img src="docs/settings-linear.png" alt="Linear settings: API key, skills, defaults and where runs go" width="220"></td>
+    <td align="center"><img src="docs/settings-general.png" alt="General settings: tabs, rows, gh44 setup and uninstall" width="180"></td>
+    <td align="center"><img src="docs/settings-github.png" alt="GitHub settings: skills and what each kind of PR suggests" width="180"></td>
+    <td align="center"><img src="docs/settings-linear.png" alt="Linear settings: API key, skills and what each kind of ticket suggests" width="180"></td>
+    <td align="center"><img src="docs/settings-oncall.png" alt="On-call settings: Sentry token, org, projects, repo profile and domain" width="180"></td>
   </tr>
 </table>
