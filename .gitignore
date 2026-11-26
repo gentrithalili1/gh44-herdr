@@ -2,3 +2,13 @@ mods/*/gpui-kit.d.ts
 mods/*/jsconfig.json
 mods/*/herdr.d.ts
 .DS_Store
+
+# Local Impeccable tool installs and context
+.agents/
+.claude/
+.codex/
+.cursor/
+.gemini/
+.impeccable/
+.opencode/
+PRODUCT.md
