@@ -287,6 +287,18 @@ const worktreeName = (w) => {
   const match = folder.match(/^([a-z]+-\d+)-?(.*)$/i);
   return match ? { key: match[1].toUpperCase(), title: match[2].replace(/-/g, " ") } : { key: folder, title: "" };
 };
+// "https://linear.app/join/issue/" from a loaded issue's URL.
+const LINEAR_ISSUE_BASE = /^https:\/\/linear\.app\/[^/]+\/issue\//;
+// A Linear issue's page by its key: the loaded issue's URL, else built from any loaded issue's
+// workspace. null: no Linear list loaded yet.
+/** @param {string} key @returns {string | null} */
+const findLinearIssueUrl = (key) => {
+  const issues = [...cache.entries()].filter(([k]) => k.startsWith("ln|")).flatMap(([, entry]) => entry.result?.items ?? []);
+  const issue = issues.find((i) => i.identifier === key);
+  if (issue?.url) return issue.url;
+  const base = issues.map((i) => i.url?.match(LINEAR_ISSUE_BASE)?.[0]).find(Boolean);
+  return base ? `${base}${key}` : null;
+};
 
 const isCollapsed = (id) => (shared(STORE.collapsed) ?? []).includes(id);
 const toggleCollapsed = (id) => {
@@ -1339,14 +1351,20 @@ export default class Hub extends View {
         .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Hide until another worktree merges")
         .on_click((_e, cx) => { cx.stop_propagation(); handleDismiss(cx); })
         .child(svg(icon("x")).size(13)));
+    // A ref that opens its page; plain text when its URL isn't known.
+    /** @param {{ id: string, text: string, url: string | null, tip: string, base: ReturnType<typeof div> }} params */
+    const link = ({ id, text, url, tip, base }) => (url
+      ? base.id(id).flex_none().cursor_pointer().hover((s) => s.text_color(t.accent)).tooltip(tip)
+        .on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); cx.open_url(url); }).child(text)
+      : base.flex_none().child(text));
     const row = (w) => {
       const { key, title } = worktreeName(w);
       return h_flex().id(`wt-merged-${w.path}`).h(34).px(10).gap(8).items_center().border_t(1).border_color(done + "40")
         .child(svg(icon("branch")).size(15).flex_none().text_color(t.dim))
         .child(h_flex().flex_1().min_w(0).gap(6).items_center().text_size(12.5)
-          .child(div().flex_none().font_semibold().text_color(t.foreground).child(key))
+          .child(link({ id: `wt-key-${w.path}`, text: key, url: findLinearIssueUrl(key), tip: "Open in Linear", base: div().font_semibold().text_color(t.foreground) }))
           .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(title))
-          .child(div().flex_none().text_size(11.5).text_color(t.dim).child(`#${w.pr}`)))
+          .child(link({ id: `wt-pr-${w.path}`, text: `#${w.pr}`, url: w.prUrl ?? null, tip: "Open on GitHub", base: div().text_size(11.5).text_color(t.dim) })))
         // A red ✕ in the banner ✕'s column: removes this one worktree.
         .child(removing.has(w.path)
           ? div().id(`wt-remove-${w.path}`).flex_none().size(24).flex().items_center().justify_center().tooltip(`Removing ${key}…`)
