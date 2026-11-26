@@ -15,10 +15,11 @@ import {
   POLL_MINUTES, CATCH_UP_HOURS, NOTIFY_SEVERITY_OPTIONS, PRIORITIES, MODELS, NUDGE_SUGGESTIONS, NEVER_SUGGESTIONS,
   DOMAIN_MODEL, BUILT_IN_TRIAGE_SKILL, getMissingSetup, setOrg, pickProjects, pickSome, parseEnvironments, addRule, toggleRule, removeRule,
 } from "./config.js";
+import { playAlertSound } from "./client.js";
 import {
   loadOncallConfig, saveOncallConfig, hasTrackerToken, saveTrackerToken, removeTrackerToken, loadTrackerAccount,
-  loadTrackerProjects, loadServiceStatus, startOncall, stopOncall, playAlertSound, loadPreview, testDomain, scanRepo,
-} from "./client.js";
+  loadTrackerProjects, loadServiceStatus, startOncall, stopOncall, loadPreview, testDomain, scanRepo,
+} from "../data.js";
 import { loadInstalledSkills, loadRepoSkills } from "../actions.js";
 import { isValidSkillName } from "../settings.js";
 import { getProvider } from "./providers/catalog.js";

@@ -16,10 +16,8 @@ import { focusAgent } from "../actions.js";
 import {
   ONCALL_VIEWS, ONCALL_FILTERS_STORE, ONCALL_DEFAULTS, SEVERITY_OPTIONS, DECIDED_BY_OPTIONS, TIME_OPTIONS, SEEN_OPTIONS, filterDecisions, getTodayStats, getNewNudges, needsAttention, seenKey, formatCost, isRerunPending, getCountdownLeft, ONCALL_SHOW_TODAY_STORE, isTodayShown, isCheckPending, splitReport,
 } from "./decisions.js";
-import {
-  loadOncallConfig, loadServiceStatus, loadDecisions, hasTrackerToken, touchHeartbeat, playAlertSound,
-  requestCheckNow, requestRerun, openReport, continueInClaude, startOncall,
-} from "./client.js";
+import { touchHeartbeat, playAlertSound, requestCheckNow, requestRerun, openReport, continueInClaude } from "./client.js";
+import { loadOncallConfig, loadServiceStatus, loadDecisions, hasTrackerToken, startOncall, isDemo } from "../data.js";
 
 /** @typedef {import("./decisions.js").Decision} Decision */
 /** @typedef {import("./decisions.js").OncallViewId} OncallViewId */
@@ -143,6 +141,7 @@ const describeIssue = ({ decision: d, trackerName }) => `${trackerName} issue ${
 // Its case's Where may send it to a background tab; Ask and Continue always open in front.
 /** @param {{ skill: string, decision: Decision, config: RunConfig, caseWhere: import("../settings.js").CaseWhere }} params */
 export function runSkillOnIssue({ skill, decision, config, caseWhere }) {
+  if (isDemo()) return;
   if (skill === CONTINUE_ACTION) {
     if (continueInClaude({ decision, config })) markSeen([decision]);
     else notify({ title: `${decision.shortId} has no Claude session`, body: "Only issues the AI looked at have one.", level: "info" });
@@ -232,7 +231,7 @@ export class OncallView {
   async read() {
     const [config, hasToken, service, decisions] = await Promise.all([loadOncallConfig(), hasTrackerToken(), loadServiceStatus(), loadDecisions()]);
     Object.assign(state, { config, hasToken, service, decisions });
-    this.toastNewNudges();
+    if (!isDemo()) this.toastNewNudges();
   }
 
   // A toast per new nudge since the last one toasted. The very first read only remembers where it is.
@@ -378,7 +377,7 @@ export class OncallView {
 
   /** @param {import("gpui-kit").Context} cx */
   handleGoOnCall(cx) {
-    if (!state.config || state.isStarting) return;
+    if (!state.config || state.isStarting || isDemo()) return;
     state.isStarting = true;
     cx.notify();
     const config = state.config;

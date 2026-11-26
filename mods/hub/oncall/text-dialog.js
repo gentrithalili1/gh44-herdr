@@ -6,7 +6,7 @@ import { theme, notify, props, openOverlay, closeOverlay, setShared } from "herd
 import { palette, stop, MONO_FONT } from "../ui.js";
 import { button, dialogHeader, dialogFooter } from "../controls.js";
 import { MAX_DOMAIN_LENGTH } from "./config.js";
-import { loadOncallConfig, saveOncallConfig } from "./client.js";
+import { loadOncallConfig, saveOncallConfig } from "../data.js";
 
 export const ONCALL_TEXT_DIALOG = "oncall-text";
 // Set to the save time after a save, so the open settings read the config again.
