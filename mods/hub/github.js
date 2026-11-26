@@ -171,7 +171,7 @@ export async function loadMergedWorktrees({ repo, main, worktrees, machine }) {
   if (worktrees.length === 0) return [];
   const [owner, name] = repo.split("/");
   try {
-    const fields = worktrees.map((w, i) => `b${i}: pullRequests(headRefName: ${JSON.stringify(w.branch)}, states: MERGED, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number headRefOid } }`).join(" ");
+    const fields = worktrees.map((w, i) => `b${i}: pullRequests(headRefName: ${JSON.stringify(w.branch)}, states: MERGED, first: 1, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number url headRefOid } }`).join(" ");
     const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${fields} } }`;
     const r = await exec("gh", ["api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`]);
     if (r.code !== 0) return [];
@@ -187,7 +187,7 @@ export async function loadMergedWorktrees({ repo, main, worktrees, machine }) {
       }
       const isContained = w.head === pr.headRefOid
         || (await exec("git", ["merge-base", "--is-ancestor", w.head, pr.headRefOid], { cwd: main, on: machine })).code === 0;
-      if (isContained) merged.push({ ...w, pr: pr.number });
+      if (isContained) merged.push({ ...w, pr: pr.number, prUrl: pr.url });
     }
     return merged;
   } catch {
