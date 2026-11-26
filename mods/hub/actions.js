@@ -1,6 +1,7 @@
 // Starting a gh44 skill in a new Claude tab: here, in the background, or in the ticket's worktree.
 // Also Ask, and the gh44 installs and uninstall.
-import { run, spaces, agents, appHome, home, notify, openOverlay, exec } from "herdr";
+import { run, spaces, agents, appHome, home, notify, exec, readTextFile } from "herdr";
+import { getWorktreesRoot, getWorktreePath } from "./worktree-path.js";
 import { moveIssueToInProgress } from "./linear.js";
 import { shouldMoveIssue, shortSkill, getAskPrompt, isValidSkillName, ASK_ACTION } from "./settings.js";
 
@@ -218,9 +219,32 @@ function startAsk(target) {
   });
 }
 
-// Herdr's own New worktree dialog creates the worktree where Herdr keeps them
-// (settings.json worktrees.directory, default ~/.herdr/worktrees/<repo>/<branch>) and opens
-// a space in it; its first tab prepares the worktree and starts Claude.
+const GIT_FETCH_TIMEOUT_MS = 120_000;
+const GIT_WORKTREE_ADD_TIMEOUT_MS = 600_000;
+const DEFAULT_BASE = "origin/main";
+// Numbered folders tried after a leftover one (thu-1, thu-1-2, ...) before giving up.
+const MAX_WORKTREE_PATH_ATTEMPTS = 10;
+
+/** @param {{ stderr: string, stdout: string }} r */
+const gitError = (r) => (r.stderr || r.stdout).trim().split("\n").at(-1) ?? "";
+
+// The first free folder for the branch's worktree. null: all taken, or no usable worktrees folder.
+/** @param {{ main: string, branch: string }} params @returns {Promise<string | null>} */
+async function findFreeWorktreePath({ main, branch }) {
+  const root = getWorktreesRoot({ settingsText: await readTextFile(`${appHome()}/settings.json`), userHome: home() });
+  if (!root) return null;
+  const repo = main.split("/").filter(Boolean).at(-1) ?? "repo";
+  for (let attempt = 0; attempt < MAX_WORKTREE_PATH_ATTEMPTS; attempt += 1) {
+    const path = getWorktreePath({ root, repo, branch, attempt });
+    if ((await exec("test", ["-e", path])).code !== 0) return path;
+  }
+  return null;
+}
+
+// A ticket's new worktree, always made from the main checkout on the fresh remote default branch,
+// wherever the panel was opened from: a new branch starts there, an existing one gets it merged in.
+// The folder goes where Herdr keeps worktrees; a leftover folder there is skipped, never deleted.
+// Then a space opens in it; its first tab prepares the worktree and starts Claude.
 // An existing checkout of the branch is reused as is.
 async function startInWorktree({ target, name, prompt }) {
   const script = `${appHome()}/mods/hub/start-worktree.sh`;
@@ -229,23 +253,33 @@ async function startInWorktree({ target, name, prompt }) {
     run("space.new", { folder: target.worktree, tab: name, argv: ["bash", script, prompt] });
     return;
   }
-  // Herdr's dialog branches a new branch from the main checkout's HEAD, which may be behind.
-  // Create it from the fresh remote default branch first; the dialog then checks it out.
+  /** @param {string} body */
+  const fail = (body) => notify({ title: `Could not create the ${target.label} worktree`, body, level: "warning" });
   try {
-    await exec("git", ["fetch", "-q", "origin"], { cwd: main });
-    const hasBranch = (await exec("git", ["show-ref", "-q", "--verify", `refs/heads/${branch}`], { cwd: main })).code === 0;
-    if (!hasBranch) {
-      const base = (await exec("git", ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], { cwd: main })).stdout.trim() || "origin/main";
-      await exec("git", ["branch", "--no-track", branch, base], { cwd: main });
+    const fetched = await exec("git", ["fetch", "-q", "origin"], { cwd: main, timeout: GIT_FETCH_TIMEOUT_MS });
+    if (fetched.code !== 0) notify({ title: "Could not fetch origin", body: `Starting from the last fetched main. ${gitError(fetched)}`, level: "warning" });
+    const base = (await exec("git", ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], { cwd: main })).stdout.trim() || DEFAULT_BASE;
+    const path = await findFreeWorktreePath({ main, branch });
+    if (!path) {
+      fail("No free folder for it in Herdr's worktrees folder (settings.json worktrees.directory).");
+      return;
     }
+    const hasBranch = (await exec("git", ["show-ref", "-q", "--verify", `refs/heads/${branch}`], { cwd: main })).code === 0;
+    const add = hasBranch ? ["worktree", "add", path, branch] : ["worktree", "add", "--no-track", "-b", branch, path, base];
+    const added = await exec("git", add, { cwd: main, timeout: GIT_WORKTREE_ADD_TIMEOUT_MS });
+    if (added.code !== 0) {
+      fail(gitError(added));
+      return;
+    }
+    if (hasBranch) {
+      const merged = await exec("git", ["merge", "--no-edit", base], { cwd: path });
+      if (merged.code !== 0) {
+        await exec("git", ["merge", "--abort"], { cwd: path });
+        notify({ title: `${branch} is not up to date`, body: `Merging ${base} conflicted, so it was left as is.`, level: "warning" });
+      }
+    }
+    run("space.new", { folder: path, tab: name, argv: ["bash", script, prompt, "--prepare"] });
   } catch (error) {
-    notify({ title: `Could not prepare branch ${branch}`, body: String(error?.message ?? error), level: "warning" });
+    fail(error instanceof Error ? error.message : String(error));
   }
-  openOverlay({
-    mod: "worktree", kind: "dialog", width: 440, height: 260,
-    props: {
-      space: spaces().find((s) => s.active)?.id, folder: target.main, action: "new",
-      branch: target.branch, tab: name, argv: ["bash", script, prompt, "--prepare"],
-    },
-  });
 }

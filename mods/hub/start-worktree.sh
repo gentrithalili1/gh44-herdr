@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# First tab of a ticket's worktree space, which Herdr's New worktree dialog created and
+# First tab of a ticket's worktree space, which the Omnia panel created (actions.js) and
 # opened in the worktree. With --prepare, make it runnable with gh44's prepare-worktree.sh
 # (env files, dependencies; gh44 itself is not changed), then start Claude.
 # Usage: start-worktree.sh <claude prompt> [--prepare]
