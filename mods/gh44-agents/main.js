@@ -557,11 +557,13 @@ export default class Agents extends View {
   }
 
   // A space's tag: its name in a faint chip of its colour, so it reads as a label, never a status dot.
-  spaceTag(t, space, name) {
+  // Calm (a row that doesn't wait on me): fainter tint, its colour mixed toward the muted text.
+  spaceTag(t, space, name, isCalm = false) {
     const fill = spaceFill(space, t);
-    const tint = /^#[0-9a-f]{6}$/i.test(fill) ? `${fill}24` : t.hover;
+    const isHex = /^#[0-9a-f]{6}$/i.test(fill);
+    const tint = isHex ? `${fill}${isCalm ? "14" : "24"}` : t.hover;
     return h_flex().flex_none().max_w(120).ml(8).h(16).px(6).items_center().rounded(4).bg(tint)
-      .text_size(11).text_color(fill)
+      .text_size(11).text_color(isCalm ? mixHex(fill, t.muted, 0.45) : fill)
       .child(div().min_w(0).truncate().child(name));
   }
 
@@ -727,6 +729,7 @@ export default class Agents extends View {
     const foldKey = `fold:${address}`;
     const isFoldable = isLeadRow && r.children.length > 0;
     const isFolded = isFoldable && this.folded.has(foldKey);
+    const isLoud = a?.status === "blocked" || a?.status === "done";
     const hidden = isLeadRow ? r.children : [];
     const top = hidden.filter((c) => c.kind === "agent").map((c) => c.agent).reduce((m, f) => ((STATUS_RANK[f.status] ?? 0) > (STATUS_RANK[m] ?? 0) ? f.status : m), null);
     const el = this.rowBox(`row-${address}`, hasGutter)
@@ -746,11 +749,13 @@ export default class Agents extends View {
         .child(svg(icon(isFolded ? "chevron-right" : "chevron")).size(12))))
       .child(this.agentIcon(t, { isLead: isLeadRow, isPicked, color: isFailed ? t.blocked : null }))
       .child(h_flex().flex_1().min_w(0).items_center()
-        .child(div().id(`title-${address}`).flex_initial().min_w(0).truncate().text_color(t.foreground)
+        // Loud only when it waits on me (needs you, done): bright and bold. Working and idle stay calm.
+        .child(div().id(`title-${address}`).flex_initial().min_w(0).truncate()
+          .text_color(isLoud || a?.focused ? t.foreground : t.muted).when(isLoud, (e) => e.font_semibold())
           .child(name))
         .when(isFolded, (e) => e.child(div().flex_none().ml(6).font_family(MONO_FONT).text_size(10.5).text_color(t.unknown).child(String(hidden.length))))
         .when(isStarting || isFailed, (e) => e.child(this.pendingNoteEl(t, lead)))
-        .when(r.isCross, (e) => e.child(this.spaceTag(t, space, spaceName)))
+        .when(r.isCross, (e) => e.child(this.spaceTag(t, space, spaceName, !isLoud && !a?.focused)))
         .when(!isLeadRow && Boolean(r.lead), (e) => e.child(h_flex().flex_shrink(100).min_w(10).ml(6).gap(4).items_center().text_size(11.5).text_color(t.unknown)
           .child(svg(icon("crown")).size(10).flex_none().text_color(t.ansi3))
           .child(div().min_w(0).truncate().child(r.lead?.name ?? "")))))
