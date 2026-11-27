@@ -24,7 +24,12 @@
     "cmd-[": "agent.prev",
     "cmd-shift-l": "layout.switch",
     "cmd-n": "space.new",
-    "cmd-shift-n": { "command": "space.new", "args": { "folder": "$HOME" } },
+    "cmd-shift-n": {
+      "command": "space.new",
+      "args": {
+        "folder": "$HOME"
+      }
+    },
     "cmd-p": "mod.open:picker",
     "cmd-shift-p": "app.palette",
     "cmd-,": "app.settings",
@@ -81,5 +86,8 @@
     "cmd-left": "send:\u0001",
     "cmd-right": "send:\u0005",
     "cmd-backspace": "send:\u0015"
+  },
+  "layout:gh44-omnia": {
+    "cmd-w": "gh44-omnia-tabs.closeTab"
   }
 }
