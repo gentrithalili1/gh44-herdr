@@ -737,7 +737,7 @@ export default class Agents extends View {
       .on_hover((isOn, cx) => this.handleRowHover({ address, isOn, cx }))
       .when(!isLeadRow, (e) => e.on_mouse_down("left", (ev) => { this.press = { address, x: ev.position.x, y: ev.position.y }; }))
       .when(Boolean(a), (e) => e
-        .on_click((ev, cx) => this.handleAgentClick({ a, isLead: isLeadRow, foldKey: isFoldable ? foldKey : null, e: ev, shownSpaces, cx }))
+        .on_click((ev, cx) => this.handleAgentClick({ a, isLead: isLeadRow, e: ev, shownSpaces, cx }))
         .on_mouse_down("right", () => openOverlay({ mod: "gh44-agents", kind: "popup", ...MENU_BOX, props: { agentMenu: { address } } })))
       .when(isFoldable, (e) => e.child(div().id(`fold-${address}`).absolute().left(3).top(5).size(16).flex().items_center().justify_center().rounded(4)
         .text_color(t.unknown).hover((s) => s.text_color(t.foreground)).tooltip(isFolded ? "Show its agents" : "Fold its agents")
@@ -782,7 +782,7 @@ export default class Agents extends View {
     return ctx.model.tree(address).map((s) => this.subRow(t, s, ctx.shown, ctx.model));
   }
 
-  // By lead: the lead is the group header. A click opens its terminal and folds it; its chevron only folds.
+  // By lead: the lead is the group header. A click opens its terminal; its chevron folds it.
   leadHeader(t, g, ctx) {
     const lead = g.lead;
     const a = ctx.model.list.find((x) => x.address === lead.address) ?? null;
@@ -793,7 +793,7 @@ export default class Agents extends View {
     const el = h_flex().id(`lh-${lead.address}`).relative().h(26).mt(6).mx(6).px(10).gap(7).flex_none().items_center().rounded(5)
       .text_size(12.5).text_color(a?.focused ? t.foreground : t.muted).when(Boolean(a?.focused), (e) => e.bg(t.selected))
       .cursor_pointer().hover((s) => s.bg(t.hover))
-      .when(Boolean(a), (e) => e.on_click((_e, cx) => { run("pane.focus", { pane: a.pane }); this.toggleFold(g.id, cx); })
+      .when(Boolean(a), (e) => e.on_click(() => run("pane.focus", { pane: a.pane }))
         .on_mouse_down("right", () => openOverlay({ mod: "gh44-agents", kind: "popup", ...MENU_BOX, props: { agentMenu: { address: lead.address } } })))
       .on_hover((isOn, cx) => this.handleRowHover({ address: lead.address, isOn, cx }))
       .child(div().id(`lh-fold-${lead.address}`).flex_none().rounded(4).text_color(t.unknown).hover((s) => s.text_color(t.foreground))
@@ -849,14 +849,13 @@ export default class Agents extends View {
     }
   }
 
-  // Click: show it (a lead with agents also folds). ⌘-click / shift-click: pick it, in any space. A lead is never picked.
-  handleAgentClick({ a, isLead, foldKey = null, e, shownSpaces, cx }) {
+  // Click: show it. ⌘-click / shift-click: pick it, in any space. A lead is never picked.
+  handleAgentClick({ a, isLead, e, shownSpaces, cx }) {
     const mode = e.modifiers?.platform ? "toggle" : e.modifiers?.shift ? "range" : null;
     if (mode && isLead) return;
     if (!mode) {
       this.selection = { selected: [], anchor: a.address };
       run("pane.focus", { pane: a.pane });
-      if (foldKey) this.toggleFold(foldKey, cx);
     } else {
       this.selection = getNextSelection({ ...this.selection, shown: shownSpaces, address: a.address, mode });
     }
