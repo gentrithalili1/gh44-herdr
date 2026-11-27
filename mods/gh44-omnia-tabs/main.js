@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, exec, nextCommand } from "herdr";
+import { spaces, panes, agents, focused, run, openOverlay, theme, window, shared, layout, settings, exec, nextCommand } from "herdr";
 
 // How often spaces without a known repo are looked up; idle once all are known.
 const REPO_LOOKUP_MS = 300;
@@ -13,6 +13,24 @@ function togglePanel(id) {
   const panel = find(root, "panel"), body = find(root, "panel-body");
   if (panel && !panel.hidden && body?.active === id) run("layout.hide", { id: "panel" });
   else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+}
+
+// Closes a tab (default: the focused one). With an agent in it, asks first: cmd-w is easy to hit.
+function closeTab(id = focused()?.tab) {
+  if (!id) return;
+  const inTab = agents().filter((a) => a.tab === id);
+  if (inTab.length === 0) { run("tab.close", { id }); return; }
+  const space = spaces().find((s) => s.tabs.some((x) => x.id === id));
+  const isLast = (space?.tabs.length ?? 0) <= 1;
+  const names = inTab.map((a) => `${a.title || a.program.name} (${a.status})`).join(", ");
+  openOverlay({
+    mod: "confirm", kind: "dialog", width: 420, height: 180,
+    props: {
+      title: inTab.length === 1 ? "Close tab with an agent?" : `Close tab with ${inTab.length} agents?`,
+      detail: `${names} will stop.${isLast ? ` It is the last tab, so ${space.name} closes too.` : ""}`,
+      command: { name: "tab.close", args: { id, confirmed: true } },
+    },
+  });
 }
 
 function find(node, id) {
@@ -52,6 +70,8 @@ export default class Tabs extends View {
     cx.spawn(async (cx) => {
       for (;;) {
         const command = await nextCommand();
+        // `gh44-omnia-tabs.closeTab` (cmd-w): close the tab, asking first when an agent runs in it.
+        if (command === "closeTab") closeTab();
         const id = PANEL_BY_COMMAND[command];
         if (id) togglePanel(id);
         cx.notify();
@@ -190,7 +210,7 @@ export default class Tabs extends View {
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); closeTab(c.id); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.

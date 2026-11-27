@@ -4,7 +4,7 @@
 // count a case's rows and open its editor.
 import { div, svg } from "gpui-kit";
 import { h_flex, v_flex, InputState, Input } from "gpui-base";
-import { theme, notify, shared } from "herdr";
+import { theme, notify, shared, setShared, run, layout } from "herdr";
 import { icon, palette, stop, GUTTER } from "./ui.js";
 import {
   bay, controlRow, toggleRow, radioRow, selectButton, getPickedText, button, statusLine, listTag, keyCell, keyCellEditing, fieldBox, linkLine, holderStrip,
@@ -14,6 +14,7 @@ import { loadInstalledSkills, uninstallGh44Omnia } from "./actions.js";
 import { Gh44Setup } from "./gh44-dialog.js";
 import { caseStrips } from "./case-editor.js";
 import { OncallSettings } from "./oncall/settings.js";
+import { OMNIA_SIDEBAR_STORE, isOmniaSidebarOn, getSidebarLayout } from "./omnia-sidebar.js";
 import {
   addSkill, removeSkill, setSkillKey, isValidSkillName, getSkillCandidates, GITHUB_SITUATIONS, LINEAR_SITUATIONS, ONCALL_SITUATIONS, canRunEntry, shortRepo,
   getLinkEntry, isLinkEntry, ASK_ACTION, ASK_DESCRIPTION, CONTINUE_ACTION, CONTINUE_DESCRIPTION, LINK_ENTRIES,
@@ -71,6 +72,14 @@ const UNINSTALL_CONFIRM_MS = 5_000;
 const UNINSTALL_ERRORS = {
   notLinked: "The hub mod is not linked from gh44-omnia, so its uninstall.sh is not known.",
   start: "uninstall.sh did not start.",
+};
+
+// Puts the other pair of mods in the sidebar blocks of the shown layout, and keeps the choice.
+const handleOmniaSidebarToggle = () => {
+  const isOmnia = !isOmniaSidebarOn(shared(OMNIA_SIDEBAR_STORE));
+  const next = getSidebarLayout({ layout: layout(), isOmnia });
+  if (next) run("layout.set", { layout: next });
+  setShared(OMNIA_SIDEBAR_STORE, isOmnia);
 };
 
 // No Linear key, Linear turned it down, or it is being checked. A key that could not be checked
@@ -430,6 +439,13 @@ export class SettingsView {
           toggleRow({ id: "oncall", label: "Show the On-call tab", isOn: settings.shouldShowOncall, onToggle: () => this.patchSettings({ shouldShowOncall: !settings.shouldShowOncall }) }),
           toggleRow({ id: "filter-chips", label: "Show active filters inline", isOn: settings.shouldShowFilterChips, onToggle: () => this.patchSettings({ shouldShowFilterChips: !settings.shouldShowFilterChips }) }),
         ],
+      }),
+      bay({
+        title: "Sidebar", description: "Spaces and agents on the left.",
+        children: [toggleRow({
+          id: "omnia-sidebar", label: "Omnia sidebar", help: "Leads, agent kinds and colors. Off: Herdr's own spaces and agents lists.",
+          isOn: isOmniaSidebarOn(shared(OMNIA_SIDEBAR_STORE)), onToggle: () => handleOmniaSidebarToggle(),
+        })],
       }),
       bay({
         title: "Rows", description: "What a GitHub or Linear row does. Space opens its details either way.",
