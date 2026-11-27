@@ -19,6 +19,7 @@ import {
   icon, palette, stop, toAnchor, holderLook, splitButtonLook, MONO_FONT, GUTTER, HOLDER_WIDTH, ACTION_COLUMN_WIDTH, SPLIT_BUTTON_HEIGHT,
 } from "./ui.js";
 import { findSpaceOnBranch, focusAgent, startSkill, selectTabNamed, getAskTabName, loadRepoSkills } from "./actions.js";
+import { getTicketBranch } from "./worktree-path.js";
 import { SettingsView } from "./settings-view.js";
 import { button } from "./controls.js";
 import {
@@ -1327,6 +1328,12 @@ export default class Hub extends View {
     return space?.folder ?? (cache.get(`wt|${this.repoId}`)?.result.items ?? []).find((w) => w.branch === branch)?.path ?? null;
   }
 
+  // A ticket's branch (worktree-path.js getTicketBranch): thu-123, or Linear's long one if only it is checked out.
+  /** @param {IssueItem} issue @returns {string} */
+  ticketBranch(issue) {
+    return getTicketBranch({ identifier: issue.identifier, linearBranch: issue.branch, isCheckedOut: (b) => Boolean(this.worktreeFor(b)) });
+  }
+
   // The repo's main checkout (the folder holding the shared .git), for new worktrees.
   repoMain() {
     return this.repoId?.endsWith("/.git") ? this.repoId.slice(0, -"/.git".length) : null;
@@ -1645,19 +1652,20 @@ export default class Hub extends View {
     const rowActions = getTicketActions({ skills: rowSkills, issue });
     const skill = rowActions.main;
     const stage = getIssueStage(issue);
-    const space = issue.branch ? spaces().find((sp) => sp.branch === issue.branch) : undefined;
-    const worktree = this.worktreeFor(issue.branch);
+    const branch = this.ticketBranch(issue);
+    const space = spaces().find((sp) => sp.branch === branch);
+    const worktree = this.worktreeFor(branch);
     const target = {
-      ref: issue.identifier, prRef: issue.prUrl, label: issue.identifier, branch: issue.branch, main: this.repoMain(), issue,
+      ref: issue.identifier, prRef: issue.prUrl, label: issue.identifier, branch, folderName: issue.identifier, main: this.repoMain(), issue,
       ...(worktree ? { worktree } : {}), ...(space ? { space: space.id } : {}),
     };
-    const agent = findAgentFor({ label: issue.identifier, branch: issue.branch });
+    const agent = findAgentFor({ label: issue.identifier, branch });
     const skills = rowActions.suggested;
     const link = toLinearLink(issue.url);
     const menu = this.rowMenu({ tab: "linear", situation, suggested: skills, target, links: [link], reason: rowActions.reason, agent, pullRequest, rowId: issue.id, isTicket: true });
     const runAt = skill ? getRunFor({ tab: "linear", situation, skill, target }) : { place: /** @type {const} */ ("here"), isBackground: false };
     const primary = this.primaryFor({
-      agent, branch: issue.branch, skill, target, link, ...runAt, afterDone: getCaseRun({ skills: rowSkills, tab: "linear", situation }).afterDone,
+      agent, branch, skill, target, link, ...runAt, afterDone: getCaseRun({ skills: rowSkills, tab: "linear", situation }).afterDone,
       start: ({ skill: s }) => startTicketSkill({ skill: s, menu }),
     });
     const priority = PRIORITY_OPTIONS.find((p) => p.value === issue.priority);
@@ -1811,7 +1819,7 @@ export default class Hub extends View {
     return {
       title: issue.title, meta: [issue.identifier, issue.state, ...(issue.project ? [issue.project] : [])].join(" · "),
       holder: { tone: STAGE_STATUS[stage], icon: `state-${stage}` }, targetLabel: issue.identifier, isMergeReady: false,
-      hasWorktreeTarget: Boolean(this.repoMain() && issue.branch), hasWorktree: Boolean(this.worktreeFor(issue.branch)), oncall: null,
+      hasWorktreeTarget: Boolean(this.repoMain()), hasWorktree: Boolean(this.worktreeFor(this.ticketBranch(issue))), oncall: null,
       source: { kind: "issue", issue },
     };
   }
@@ -1846,7 +1854,7 @@ export default class Hub extends View {
         id: `pr-${pr.id}`, ref: `#${pr.number}`, title: pr.title, agent: findAgentFor({ label: `#${pr.number}`, branch: pr.branch }),
       })) : []),
       ...(linear?.status === "success" ? linear.items.map((/** @type {IssueItem} */ issue) => ({
-        id: `ln-${issue.id}`, ref: issue.identifier, title: issue.title, agent: findAgentFor({ label: issue.identifier, branch: issue.branch }),
+        id: `ln-${issue.id}`, ref: issue.identifier, title: issue.title, agent: findAgentFor({ label: issue.identifier, branch: this.ticketBranch(issue) }),
       })) : []),
     ];
     const { notices, next } = getNewlyBlocked({ previous: agentStatuses, rows: rows.map((row) => ({ ...row, status: row.agent?.status ?? null })) });
@@ -2120,7 +2128,7 @@ export default class Hub extends View {
       onClick: (cx) => { this.askSkill = null; this.menuIndex = NO_MENU_ROW; cx.notify(); },
     });
     /** @type {Record<string, string | null>} */
-    const hints = { worktree: target.branch ?? null, here: spaces().find((sp) => sp.active)?.name ?? null };
+    const hints = { worktree: target.folderName ?? target.branch ?? null, here: spaces().find((sp) => sp.active)?.name ?? null };
     return [title, ...WHERE_OPTIONS.map((o) => this.menuRow({
       id: `where-${o.id}`, label: o.label, actionIcon: o.icon, hint: hints[o.id],
       onClick: () => this.queueStart({ skill, target, role: getRole(skill), isWorktree: o.isWorktree }),

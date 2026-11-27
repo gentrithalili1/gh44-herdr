@@ -1,5 +1,6 @@
 // Where the panel puts a ticket's new worktree: Herdr's worktrees folder (settings.json
-// worktrees.directory, default ~/.herdr/worktrees), then <repo>/<branch slug>, like Herdr's dialog.
+// worktrees.directory, default ~/.herdr/worktrees), then <repo>/<folder name slug>, like Herdr's dialog.
+// A ticket's worktree is named by its identifier (THU-123) on a branch thu-123, not Linear's long branchName.
 
 const DEFAULT_WORKTREES_DIRECTORY = "~/.herdr/worktrees";
 
@@ -28,10 +29,19 @@ export function slugBranch(branch) {
   return `branch-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+// A ticket's branch: its lowercased identifier (thu-123), unless only Linear's long branchName is
+// already checked out (a worktree made before), which is kept.
+/** @param {{ identifier: string, linearBranch: string | null, isCheckedOut: (branch: string) => boolean }} params */
+export function getTicketBranch({ identifier, linearBranch, isCheckedOut }) {
+  const short = identifier.toLowerCase();
+  return linearBranch && !isCheckedOut(short) && isCheckedOut(linearBranch) ? linearBranch : short;
+}
+
 // The attempt-th folder to try: the plain one first, then "-2", "-3", ... when an earlier one
 // is taken (a folder left from a removed worktree is never deleted or reused).
-/** @param {{ root: string, repo: string, branch: string, attempt: number }} params */
-export function getWorktreePath({ root, repo, branch, attempt }) {
-  const base = `${root}/${repo}/${slugBranch(branch)}`;
+// name: the folder's name (a ticket's identifier, else the branch).
+/** @param {{ root: string, repo: string, name: string, attempt: number }} params */
+export function getWorktreePath({ root, repo, name, attempt }) {
+  const base = `${root}/${repo}/${slugBranch(name)}`;
   return attempt === 0 ? base : `${base}-${attempt + 1}`;
 }
