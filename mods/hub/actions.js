@@ -165,7 +165,7 @@ export function focusAgent(agent) {
 }
 
 // target: { ref (what the skill gets), prRef? (for PR skills), label (tab name prefix),
-//   branch?, folder?, main? (the repo's main checkout), worktree? (an existing checkout of the branch),
+//   branch?, folderName? (a new worktree's folder, else the branch's), folder?, main? (the repo's main checkout), worktree? (an existing checkout of the branch),
 //   space? (a space already open on the branch), issue? (the Linear issue, for its status) }
 // role (settings.js getSkillRole): a review skill gets prRef, a work skill moves a not started ticket.
 // isBackground: open the tab without switching to it (reviews). isWorktree: in the ticket's worktree.
@@ -228,14 +228,14 @@ const MAX_WORKTREE_PATH_ATTEMPTS = 10;
 /** @param {{ stderr: string, stdout: string }} r */
 const gitError = (r) => (r.stderr || r.stdout).trim().split("\n").at(-1) ?? "";
 
-// The first free folder for the branch's worktree. null: all taken, or no usable worktrees folder.
-/** @param {{ main: string, branch: string }} params @returns {Promise<string | null>} */
-async function findFreeWorktreePath({ main, branch }) {
+// The first free folder for a worktree named name. null: all taken, or no usable worktrees folder.
+/** @param {{ main: string, name: string }} params @returns {Promise<string | null>} */
+async function findFreeWorktreePath({ main, name }) {
   const root = getWorktreesRoot({ settingsText: await readTextFile(`${appHome()}/settings.json`), userHome: home() });
   if (!root) return null;
   const repo = main.split("/").filter(Boolean).at(-1) ?? "repo";
   for (let attempt = 0; attempt < MAX_WORKTREE_PATH_ATTEMPTS; attempt += 1) {
-    const path = getWorktreePath({ root, repo, branch, attempt });
+    const path = getWorktreePath({ root, repo, name, attempt });
     if ((await exec("test", ["-e", path])).code !== 0) return path;
   }
   return null;
@@ -259,7 +259,7 @@ async function startInWorktree({ target, name, prompt }) {
     const fetched = await exec("git", ["fetch", "-q", "origin"], { cwd: main, timeout: GIT_FETCH_TIMEOUT_MS });
     if (fetched.code !== 0) notify({ title: "Could not fetch origin", body: `Starting from the last fetched main. ${gitError(fetched)}`, level: "warning" });
     const base = (await exec("git", ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], { cwd: main })).stdout.trim() || DEFAULT_BASE;
-    const path = await findFreeWorktreePath({ main, branch });
+    const path = await findFreeWorktreePath({ main, name: target.folderName ?? branch });
     if (!path) {
       fail("No free folder for it in Herdr's worktrees folder (settings.json worktrees.directory).");
       return;
